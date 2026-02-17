@@ -1,0 +1,40 @@
+name: Vinted Cycle
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
+
+jobs:
+  run-cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: vinted-cycle
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Chrome
+        uses: browser-actions/setup-chrome@v1
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r workers/requirements.txt
+
+      - name: Run worker cycle
+        env:
+          CONVEX_SITE_URL: ${{ secrets.CONVEX_SITE_URL }}
+          INGEST_SHARED_SECRET: ${{ secrets.INGEST_SHARED_SECRET }}
+          VINTED_QUERY: ${{ secrets.VINTED_QUERY || 'patagonia r1' }}
+          MAX_PAGES: ${{ secrets.MAX_PAGES || '3' }}
+          DISABLE_NOTIFY: ${{ secrets.DISABLE_NOTIFY || '1' }}
+        run: python workers/run_cycle.py

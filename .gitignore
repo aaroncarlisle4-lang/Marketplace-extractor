@@ -1,0 +1,6 @@
+.env.local
+.env
+workers/.env
+workers/__pycache__/
+*.pyc
+.DS_Store

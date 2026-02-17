@@ -1,0 +1,31 @@
+{
+  "name": "marketplace-extractor",
+  "version": "1.0.0",
+  "description": "Vinted Patagonia R1 screener and notifier",
+  "main": "index.js",
+  "scripts": {
+    "convex:dev": "npx convex dev",
+    "convex:deploy": "npx convex deploy",
+    "worker:run": "python workers/run_cycle.py",
+    "test": "echo \"No tests configured yet\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/aaroncarlisle4-lang/Marketplace-extractor.git"
+  },
+  "keywords": [
+    "convex",
+    "vinted",
+    "selenium",
+    "telegram"
+  ],
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/aaroncarlisle4-lang/Marketplace-extractor/issues"
+  },
+  "homepage": "https://github.com/aaroncarlisle4-lang/Marketplace-extractor#readme",
+  "dependencies": {
+    "convex": "^1.31.7"
+  }
+}

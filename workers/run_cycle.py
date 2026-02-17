@@ -1,0 +1,88 @@
+import json
+import os
+import sys
+import time
+from typing import Any, Dict, List
+
+import requests
+from dotenv import load_dotenv
+
+from vinted_scraper import scrape_vinted_listings_with_stats
+
+
+def require_env(name: str) -> str:
+    value = os.getenv(name)
+    if not value:
+        raise RuntimeError(f"Missing required env var: {name}")
+    return value
+
+
+def post_json(url: str, secret: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    last_error: Exception | None = None
+    for attempt in range(1, 4):
+        try:
+            response = requests.post(
+                url,
+                headers={
+                    "content-type": "application/json",
+                    "x-ingest-secret": secret,
+                },
+                data=json.dumps(payload),
+                timeout=60,
+            )
+            response.raise_for_status()
+            return response.json()
+        except Exception as err:  # noqa: BLE001
+            last_error = err
+            if attempt < 3:
+                time.sleep(attempt * 2)
+    raise RuntimeError(f"POST failed for {url}: {last_error}")
+
+
+def main() -> int:
+    load_dotenv()
+
+    convex_site_url = require_env("CONVEX_SITE_URL")
+    ingest_secret = require_env("INGEST_SHARED_SECRET")
+
+    query = os.getenv("VINTED_QUERY", "patagonia r1")
+    max_pages = int(os.getenv("MAX_PAGES", "3"))
+    disable_notify = os.getenv("DISABLE_NOTIFY", "1").strip().lower() in {"1", "true", "yes", "on"}
+
+    scrape_result = scrape_vinted_listings_with_stats(query=query, max_pages=max_pages)
+    listings: List[Dict[str, Any]] = scrape_result["listings"]
+    if not listings:
+        print(json.dumps({
+            "scraped": 0,
+            "scrape_stats": scrape_result["stats"],
+            "ingest": None,
+            "notify": None,
+        }, indent=2))
+        return 0
+
+    ingest_url = f"{convex_site_url}/ingest/listings"
+    notify_url = f"{convex_site_url}/jobs/run-notifications"
+
+    ingest_result = post_json(ingest_url, ingest_secret, {"listings": listings})
+    notify_result = None
+    if not disable_notify:
+        notify_result = post_json(notify_url, ingest_secret, {"limit": 25})
+    else:
+        notify_result = {"disabled": True, "reason": "DISABLE_NOTIFY is enabled"}
+
+    print(json.dumps({
+        "scraped": len(listings),
+        "scrape_stats": scrape_result["stats"],
+        "screen_only_mode": disable_notify,
+        "ingest": ingest_result,
+        "notify": notify_result,
+    }, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as exc:  # noqa: BLE001
+        print(f"run_cycle failed: {exc}", file=sys.stderr)
+        raise
