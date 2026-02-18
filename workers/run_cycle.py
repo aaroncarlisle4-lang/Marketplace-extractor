@@ -17,6 +17,14 @@ def require_env(name: str) -> str:
     return value
 
 
+def normalize_url_env(value: str) -> str:
+    # Guard against accidental newlines/spaces in GitHub secrets.
+    cleaned = "".join(value.split()).rstrip("/")
+    if not cleaned.startswith("http://") and not cleaned.startswith("https://"):
+        raise RuntimeError(f"Invalid URL env value: {cleaned}")
+    return cleaned
+
+
 def post_json(url: str, secret: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     last_error: Exception | None = None
     for attempt in range(1, 4):
@@ -42,7 +50,7 @@ def post_json(url: str, secret: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 def main() -> int:
     load_dotenv()
 
-    convex_site_url = require_env("CONVEX_SITE_URL")
+    convex_site_url = normalize_url_env(require_env("CONVEX_SITE_URL"))
     ingest_secret = require_env("INGEST_SHARED_SECRET")
 
     query = os.getenv("VINTED_QUERY", "patagonia r1")
