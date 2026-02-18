@@ -25,6 +25,14 @@ def normalize_url_env(value: str) -> str:
     return cleaned
 
 
+def drop_none_values(obj: Any) -> Any:
+    if isinstance(obj, dict):
+        return {k: drop_none_values(v) for k, v in obj.items() if v is not None}
+    if isinstance(obj, list):
+        return [drop_none_values(v) for v in obj]
+    return obj
+
+
 def post_json(url: str, secret: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     last_error: Exception | None = None
     for attempt in range(1, 4):
@@ -65,7 +73,7 @@ def main() -> int:
         page_load_timeout_seconds=page_load_timeout_seconds,
         max_runtime_seconds=max_runtime_seconds,
     )
-    listings: List[Dict[str, Any]] = scrape_result["listings"]
+    listings: List[Dict[str, Any]] = drop_none_values(scrape_result["listings"])
     if not listings:
         print(json.dumps({
             "scraped": 0,
