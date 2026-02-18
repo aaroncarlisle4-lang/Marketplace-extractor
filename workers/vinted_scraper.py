@@ -128,6 +128,7 @@ class VintedScraper:
             "pages_scanned": 0,
             "page_link_count": 0,
             "listing_errors": 0,
+            "listing_skipped_url_not_r1": 0,
             "listing_skipped_not_r1": 0,
         }
 
@@ -280,6 +281,10 @@ class VintedScraper:
         text = f"{title} {description}"
         return "patagonia" in brand and bool(re.search(r"\br1\b", text))
 
+    def _looks_like_r1_url(self, url: str) -> bool:
+        slug = url.lower()
+        return "r1" in slug
+
     def run(self, config: ScrapeConfig) -> List[Dict]:
         criteria = define_criteria_query(
             order=[config.order],
@@ -304,6 +309,10 @@ class VintedScraper:
                 if url in seen:
                     continue
                 seen.add(url)
+                # Cheap early reject avoids opening dozens of irrelevant listing pages.
+                if config.strict_r1_only and not self._looks_like_r1_url(url):
+                    self.stats["listing_skipped_url_not_r1"] += 1
+                    continue
                 try:
                     item = self.scrape_listing(url)
                 except Exception:
