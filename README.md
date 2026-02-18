@@ -11,7 +11,7 @@ Patagonia R1 screener + notifier for Vinted UK using:
   - brand contains Patagonia
   - model contains `r1` (Regulator-only titles without `r1` are rejected)
   - category + condition allowlists
-  - price <= `£80` (8000 pence)
+  - price <= `£50` (5000 pence)
   - published within last 24 hours
 - Prioritizes freshness tiers:
   - `HOT` < 10 min

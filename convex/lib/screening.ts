@@ -1,5 +1,8 @@
 import type { FreshnessBucket, ListingInput, MatchResult } from "./types";
 
+const MAX_PRICE_MINOR = 5000;
+const RECENT_NOTIFY_MIN_SCORE = 35;
+
 const ALLOWED_CONDITION_PATTERNS = [
   "new with tags",
   "new without tags",
@@ -67,7 +70,7 @@ export function screenListing(
   const priceOk =
     (listing.currency ?? "").toUpperCase() === "GBP" &&
     typeof listing.priceMinor === "number" &&
-    listing.priceMinor <= 8000;
+    listing.priceMinor <= MAX_PRICE_MINOR;
   if (!priceOk) reasons.push("price_or_currency_not_allowed");
 
   const freshnessBucket = computeFreshness(ageMinutes);
@@ -78,7 +81,7 @@ export function screenListing(
   else if (freshnessBucket === "RECENT") score += 20;
 
   if (typeof listing.priceMinor === "number") {
-    const valueGain = Math.max(0, 8000 - listing.priceMinor);
+    const valueGain = Math.max(0, MAX_PRICE_MINOR - listing.priceMinor);
     score += Math.min(30, Math.floor(valueGain / 100));
   }
 
@@ -88,7 +91,10 @@ export function screenListing(
     brandOk && modelOk && categoryOk && conditionOk && in24h && priceOk;
 
   const eligibleForNotify =
-    isMatch && (freshnessBucket === "HOT" || freshnessBucket === "NEW" || score >= 45);
+    isMatch &&
+    (freshnessBucket === "HOT" ||
+      freshnessBucket === "NEW" ||
+      (freshnessBucket === "RECENT" && score >= RECENT_NOTIFY_MIN_SCORE));
 
   return {
     isMatch,

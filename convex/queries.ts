@@ -57,3 +57,48 @@ export const getNotificationFailureSummary = query({
     };
   },
 });
+
+export const getEligibleListingsTable = query({
+  args: {
+    limit: v.optional(v.number()),
+    onlyEligibleForNotify: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const limit = args.limit ?? 50;
+    const onlyEligibleForNotify = args.onlyEligibleForNotify ?? true;
+
+    const matches = await ctx.db.query("matches").order("desc").take(limit * 5);
+    const out = [];
+
+    for (const match of matches) {
+      if (!match.isMatch) continue;
+      if (match.freshnessBucket === "STALE") continue;
+      if (onlyEligibleForNotify && !match.eligibleForNotify) continue;
+
+      const listing = await ctx.db.get(match.listingRef);
+      if (!listing) continue;
+
+      out.push({
+        source: match.source,
+        listingId: match.listingId,
+        title: listing.title,
+        brand: listing.brand,
+        priceMinor: listing.priceMinor,
+        currency: listing.currency,
+        size: listing.size,
+        condition: listing.condition,
+        ageMinutes: match.ageMinutes,
+        freshnessBucket: match.freshnessBucket,
+        score: match.score,
+        eligibleForNotify: match.eligibleForNotify,
+        reasons: match.reasons,
+        url: listing.url,
+        publishedAt: listing.publishedAt,
+      });
+
+      if (out.length >= limit) break;
+    }
+
+    return out;
+  },
+});

@@ -7,6 +7,15 @@ function getRequiredEnv(name: string): string {
   return value;
 }
 
+function formatAge(ageMinutes: number): string {
+  if (ageMinutes < 60) return `${ageMinutes}m`;
+  const days = Math.floor(ageMinutes / (24 * 60));
+  const hours = Math.floor((ageMinutes % (24 * 60)) / 60);
+  const minutes = ageMinutes % 60;
+  if (days > 0) return `${days}d ${hours}h ${minutes}m`;
+  return `${hours}h ${minutes}m`;
+}
+
 export const sendListingAlert = internalAction({
   args: {
     listing: v.object({
@@ -45,7 +54,7 @@ export const sendListingAlert = internalAction({
       `Price: ${price}`,
       `Condition: ${args.listing.condition ?? "unknown"}`,
       `Size: ${args.listing.size ?? "unknown"}`,
-      `Age: ${args.match.ageMinutes}m`,
+      `Age: ${formatAge(args.match.ageMinutes)}`,
       `Score: ${args.match.score}`,
       args.listing.url,
     ].join("\n");
