@@ -65,6 +65,7 @@ def main() -> int:
     max_pages = int(os.getenv("MAX_PAGES", "3"))
     page_load_timeout_seconds = int(os.getenv("PAGE_LOAD_TIMEOUT_SECONDS", "20"))
     max_runtime_seconds = int(os.getenv("MAX_RUNTIME_SECONDS", "240"))
+    max_item_age_hours = int(os.getenv("MAX_ITEM_AGE_HOURS", "24"))
     disable_notify = os.getenv("DISABLE_NOTIFY", "1").strip().lower() in {"1", "true", "yes", "on"}
 
     scrape_result = scrape_vinted_listings_with_stats(
@@ -72,6 +73,7 @@ def main() -> int:
         max_pages=max_pages,
         page_load_timeout_seconds=page_load_timeout_seconds,
         max_runtime_seconds=max_runtime_seconds,
+        max_item_age_hours=max_item_age_hours,
     )
     listings: List[Dict[str, Any]] = drop_none_values(scrape_result["listings"])
     if not listings:

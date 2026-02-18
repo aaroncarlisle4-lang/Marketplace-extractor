@@ -106,6 +106,7 @@ class ScrapeConfig:
     strict_r1_only: bool = True
     page_load_timeout_seconds: int = 20
     max_runtime_seconds: int = 240
+    max_item_age_hours: int = 24
 
 
 class VintedScraper:
@@ -129,6 +130,8 @@ class VintedScraper:
             "page_link_count": 0,
             "listing_errors": 0,
             "listing_skipped_not_r1": 0,
+            "listing_skipped_missing_published_at": 0,
+            "listing_skipped_stale_24h": 0,
         }
 
     def close(self) -> None:
@@ -357,6 +360,8 @@ class VintedScraper:
         listings: List[Dict] = []
         seen = set()
         started = monotonic()
+        now_ts = datetime.now(timezone.utc).timestamp()
+        max_age_minutes = config.max_item_age_hours * 60
 
         for page in range(1, config.max_pages + 1):
             if monotonic() - started > config.max_runtime_seconds:
@@ -380,6 +385,19 @@ class VintedScraper:
                 if config.strict_r1_only and not self._is_strict_r1(record):
                     self.stats["listing_skipped_not_r1"] += 1
                     continue
+                published_at = record.get("publishedAt")
+                if not published_at:
+                    self.stats["listing_skipped_missing_published_at"] += 1
+                    continue
+                try:
+                    published_ts = datetime.fromisoformat(published_at).timestamp()
+                except Exception:
+                    self.stats["listing_skipped_missing_published_at"] += 1
+                    continue
+                age_minutes = max(0, int((now_ts - published_ts) / 60))
+                if age_minutes > max_age_minutes:
+                    self.stats["listing_skipped_stale_24h"] += 1
+                    continue
                 listings.append(record)
 
         return listings
@@ -399,6 +417,7 @@ def scrape_vinted_listings_with_stats(
     max_pages: int,
     page_load_timeout_seconds: int = 20,
     max_runtime_seconds: int = 240,
+    max_item_age_hours: int = 24,
 ) -> Dict:
     scraper = VintedScraper(page_load_timeout_seconds=page_load_timeout_seconds)
     try:
@@ -407,6 +426,7 @@ def scrape_vinted_listings_with_stats(
             max_pages=max_pages,
             page_load_timeout_seconds=page_load_timeout_seconds,
             max_runtime_seconds=max_runtime_seconds,
+            max_item_age_hours=max_item_age_hours,
         )
         listings = scraper.run(config)
         return {"listings": listings, "stats": scraper.stats}
