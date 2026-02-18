@@ -128,7 +128,6 @@ class VintedScraper:
             "pages_scanned": 0,
             "page_link_count": 0,
             "listing_errors": 0,
-            "listing_skipped_url_not_r1": 0,
             "listing_skipped_not_r1": 0,
         }
 
@@ -197,7 +196,36 @@ class VintedScraper:
             out.append(href)
         self.stats["page_link_count"] += len(out)
         return out
-        return out
+
+    def _extract_embedded_items(self, search_url: str) -> List[Dict]:
+        try:
+            self.driver.get(search_url)
+        except TimeoutException:
+            try:
+                self.driver.execute_script("window.stop();")
+            except Exception:
+                return []
+        return self._extract_embedded_items_from_html(self.driver.page_source)
+
+    def _extract_embedded_items_from_html(self, html: str) -> List[Dict]:
+        marker = '\\"items\\":{\\"items\\":['
+        start = html.find(marker)
+        if start == -1:
+            return []
+        start += len(marker)
+        end = html.find('],\\"pagination\\":', start)
+        if end == -1:
+            return []
+        escaped = "[" + html[start:end] + "]"
+        try:
+            payload = escaped.encode("utf-8").decode("unicode_escape")
+            items = json.loads(payload)
+        except Exception:
+            return []
+        if not isinstance(items, list):
+            return []
+        self.stats["page_link_count"] += len(items)
+        return items
 
     def _extract_listing_id(self, url: str) -> str:
         match = re.search(r"/items/(\d+)", url)
@@ -281,9 +309,44 @@ class VintedScraper:
         text = f"{title} {description}"
         return "patagonia" in brand and bool(re.search(r"\br1\b", text))
 
-    def _looks_like_r1_url(self, url: str) -> bool:
-        slug = url.lower()
-        return "r1" in slug
+    def _record_from_embedded_item(self, item: Dict) -> Optional[Dict]:
+        listing_id = item.get("id")
+        path = item.get("path")
+        if listing_id is None or not isinstance(path, str):
+            return None
+
+        price = item.get("price") or {}
+        amount = price.get("amount")
+        currency = price.get("currency_code") or "GBP"
+
+        published_ts = (
+            item.get("created_at_ts")
+            or item.get("updated_at_ts")
+            or ((item.get("photo") or {}).get("high_resolution") or {}).get("timestamp")
+        )
+        published_at = None
+        if isinstance(published_ts, (int, float)):
+            published_at = datetime.fromtimestamp(published_ts, timezone.utc).isoformat()
+
+        return {
+            "source": "vinted_uk",
+            "listingId": str(listing_id),
+            "url": f"https://www.vinted.co.uk{path}" if path.startswith("/") else path,
+            "title": item.get("title") or "(untitled)",
+            "brand": item.get("brand_title"),
+            "priceMinor": int(round(float(amount) * 100)) if amount is not None else None,
+            "currency": currency,
+            "size": item.get("size_title"),
+            "condition": item.get("status"),
+            "category": "clothes",
+            "publishedAt": published_at,
+            "fetchedAt": _utc_now_iso(),
+            "location": None,
+            "views": item.get("view_count"),
+            "interested": item.get("favourite_count"),
+            "description": item.get("description"),
+            "imageUrl": (item.get("photo") or {}).get("url"),
+        }
 
     def run(self, config: ScrapeConfig) -> List[Dict]:
         criteria = define_criteria_query(
@@ -301,28 +364,23 @@ class VintedScraper:
                 break
             self.stats["pages_scanned"] += 1
             search_url = build_search_url(config.query, criteria, page)
-            urls = self._extract_listing_urls(search_url)
-            for url in urls:
+            items = self._extract_embedded_items(search_url)
+            for raw_item in items:
                 if monotonic() - started > config.max_runtime_seconds:
                     self.stats["stopped_reason"] = "max_runtime_reached"
                     return listings
-                if url in seen:
-                    continue
-                seen.add(url)
-                # Cheap early reject avoids opening dozens of irrelevant listing pages.
-                if config.strict_r1_only and not self._looks_like_r1_url(url):
-                    self.stats["listing_skipped_url_not_r1"] += 1
-                    continue
-                try:
-                    item = self.scrape_listing(url)
-                except Exception:
+                record = self._record_from_embedded_item(raw_item)
+                if not record:
                     self.stats["listing_errors"] += 1
                     continue
-                if item:
-                    if config.strict_r1_only and not self._is_strict_r1(item):
-                        self.stats["listing_skipped_not_r1"] += 1
-                        continue
-                    listings.append(item)
+                listing_id = record["listingId"]
+                if listing_id in seen:
+                    continue
+                seen.add(listing_id)
+                if config.strict_r1_only and not self._is_strict_r1(record):
+                    self.stats["listing_skipped_not_r1"] += 1
+                    continue
+                listings.append(record)
 
         return listings
 
