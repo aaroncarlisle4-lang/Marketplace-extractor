@@ -47,9 +47,16 @@ def main() -> int:
 
     query = os.getenv("VINTED_QUERY", "patagonia r1")
     max_pages = int(os.getenv("MAX_PAGES", "3"))
+    page_load_timeout_seconds = int(os.getenv("PAGE_LOAD_TIMEOUT_SECONDS", "20"))
+    max_runtime_seconds = int(os.getenv("MAX_RUNTIME_SECONDS", "240"))
     disable_notify = os.getenv("DISABLE_NOTIFY", "1").strip().lower() in {"1", "true", "yes", "on"}
 
-    scrape_result = scrape_vinted_listings_with_stats(query=query, max_pages=max_pages)
+    scrape_result = scrape_vinted_listings_with_stats(
+        query=query,
+        max_pages=max_pages,
+        page_load_timeout_seconds=page_load_timeout_seconds,
+        max_runtime_seconds=max_runtime_seconds,
+    )
     listings: List[Dict[str, Any]] = scrape_result["listings"]
     if not listings:
         print(json.dumps({

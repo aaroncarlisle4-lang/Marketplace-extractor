@@ -70,7 +70,9 @@ Set these repository secrets:
 - `CONVEX_SITE_URL`
 - `INGEST_SHARED_SECRET`
 - `VINTED_QUERY` (optional, defaults to `patagonia r1`)
-- `MAX_PAGES` (optional, defaults to `3`)
+- `MAX_PAGES` (optional, defaults to `1`)
+- `PAGE_LOAD_TIMEOUT_SECONDS` (optional, defaults to `15`)
+- `MAX_RUNTIME_SECONDS` (optional, defaults to `180`)
 - `DISABLE_NOTIFY` (optional, defaults to `1` for screener-only mode)
 
 The workflow runs every 5 minutes.

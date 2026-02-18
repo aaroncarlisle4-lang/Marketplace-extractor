@@ -8,7 +8,7 @@ on:
 jobs:
   run-cycle:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     concurrency:
       group: vinted-cycle
       cancel-in-progress: false
@@ -35,6 +35,8 @@ jobs:
           CONVEX_SITE_URL: ${{ secrets.CONVEX_SITE_URL }}
           INGEST_SHARED_SECRET: ${{ secrets.INGEST_SHARED_SECRET }}
           VINTED_QUERY: ${{ secrets.VINTED_QUERY || 'patagonia r1' }}
-          MAX_PAGES: ${{ secrets.MAX_PAGES || '3' }}
+          MAX_PAGES: ${{ secrets.MAX_PAGES || '1' }}
+          PAGE_LOAD_TIMEOUT_SECONDS: ${{ secrets.PAGE_LOAD_TIMEOUT_SECONDS || '15' }}
+          MAX_RUNTIME_SECONDS: ${{ secrets.MAX_RUNTIME_SECONDS || '180' }}
           DISABLE_NOTIFY: ${{ secrets.DISABLE_NOTIFY || '1' }}
         run: python workers/run_cycle.py

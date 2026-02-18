@@ -4,6 +4,7 @@ import re
 import urllib.parse
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from time import monotonic
 from typing import Dict, List, Optional
 
 try:
@@ -103,10 +104,12 @@ class ScrapeConfig:
     order: str = "most recent first"
     catalog: str = "men"
     strict_r1_only: bool = True
+    page_load_timeout_seconds: int = 20
+    max_runtime_seconds: int = 240
 
 
 class VintedScraper:
-    def __init__(self) -> None:
+    def __init__(self, page_load_timeout_seconds: int = 20) -> None:
         if webdriver is None or Options is None or WebDriverWait is None:
             raise RuntimeError(
                 "selenium is not installed in this environment. "
@@ -118,6 +121,8 @@ class VintedScraper:
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         self.driver = webdriver.Chrome(options=options)
+        self.driver.set_page_load_timeout(page_load_timeout_seconds)
+        self.driver.set_script_timeout(page_load_timeout_seconds)
         self.wait = WebDriverWait(self.driver, 20)
         self.stats = {
             "pages_scanned": 0,
@@ -131,7 +136,14 @@ class VintedScraper:
 
     @retry(wait=wait_exponential(multiplier=1, min=1, max=8), stop=stop_after_attempt(3))
     def _extract_listing_urls(self, search_url: str) -> List[str]:
-        self.driver.get(search_url)
+        try:
+            self.driver.get(search_url)
+        except TimeoutException:
+            # Continue parsing whatever HTML was received before timeout.
+            try:
+                self.driver.execute_script("window.stop();")
+            except Exception:
+                pass
         try:
             self.wait.until(
                 EC.presence_of_element_located((By.CSS_SELECTOR, 'a[href*="/items/"]'))
@@ -195,7 +207,13 @@ class VintedScraper:
 
     @retry(wait=wait_exponential(multiplier=1, min=1, max=8), stop=stop_after_attempt(3))
     def scrape_listing(self, url: str) -> Optional[Dict]:
-        self.driver.get(url)
+        try:
+            self.driver.get(url)
+        except TimeoutException:
+            try:
+                self.driver.execute_script("window.stop();")
+            except Exception:
+                return None
         time_el = self.driver.find_elements(By.CSS_SELECTOR, "time[datetime]")
         published_at = None
         if time_el:
@@ -270,12 +288,19 @@ class VintedScraper:
         )
         listings: List[Dict] = []
         seen = set()
+        started = monotonic()
 
         for page in range(1, config.max_pages + 1):
+            if monotonic() - started > config.max_runtime_seconds:
+                self.stats["stopped_reason"] = "max_runtime_reached"
+                break
             self.stats["pages_scanned"] += 1
             search_url = build_search_url(config.query, criteria, page)
             urls = self._extract_listing_urls(search_url)
             for url in urls:
+                if monotonic() - started > config.max_runtime_seconds:
+                    self.stats["stopped_reason"] = "max_runtime_reached"
+                    return listings
                 if url in seen:
                     continue
                 seen.add(url)
@@ -302,10 +327,20 @@ def scrape_vinted_listings(query: str, max_pages: int) -> List[Dict]:
         scraper.close()
 
 
-def scrape_vinted_listings_with_stats(query: str, max_pages: int) -> Dict:
-    scraper = VintedScraper()
+def scrape_vinted_listings_with_stats(
+    query: str,
+    max_pages: int,
+    page_load_timeout_seconds: int = 20,
+    max_runtime_seconds: int = 240,
+) -> Dict:
+    scraper = VintedScraper(page_load_timeout_seconds=page_load_timeout_seconds)
     try:
-        config = ScrapeConfig(query=query, max_pages=max_pages)
+        config = ScrapeConfig(
+            query=query,
+            max_pages=max_pages,
+            page_load_timeout_seconds=page_load_timeout_seconds,
+            max_runtime_seconds=max_runtime_seconds,
+        )
         listings = scraper.run(config)
         return {"listings": listings, "stats": scraper.stats}
     finally:
