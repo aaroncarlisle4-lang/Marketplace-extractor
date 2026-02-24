@@ -1,0 +1,49 @@
+name: Facebook Marketplace Cycle
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
+
+jobs:
+  run-cycle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: facebook-cycle
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: workers/requirements.txt
+
+      - name: Install Chrome
+        uses: browser-actions/setup-chrome@v1
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r workers/requirements.txt
+
+      - name: Run facebook worker cycle
+        env:
+          CONVEX_SITE_URL: ${{ secrets.CONVEX_SITE_URL_FACEBOOK }}
+          INGEST_SHARED_SECRET: ${{ secrets.INGEST_SHARED_SECRET_FACEBOOK }}
+          FACEBOOK_QUERIES: ${{ secrets.FACEBOOK_QUERIES || 'captains chair,chesterfield captain chair' }}
+          FACEBOOK_TARGET_TERMS: ${{ secrets.FACEBOOK_TARGET_TERMS || 'captains chair,captain chair,chesterfield captain chair' }}
+          FACEBOOK_LOCATION_SLUG: ${{ secrets.FACEBOOK_LOCATION_SLUG || 'belfast' }}
+          FACEBOOK_RADIUS_MILES: ${{ secrets.FACEBOOK_RADIUS_MILES || '40' }}
+          STRICT_TARGET_ONLY: ${{ secrets.STRICT_TARGET_ONLY || '1' }}
+          MAX_PAGES: ${{ secrets.MAX_PAGES || '2' }}
+          PAGE_LOAD_TIMEOUT_SECONDS: ${{ secrets.PAGE_LOAD_TIMEOUT_SECONDS || '20' }}
+          MAX_RUNTIME_SECONDS: ${{ secrets.MAX_RUNTIME_SECONDS || '180' }}
+          MAX_ITEM_AGE_HOURS: ${{ secrets.MAX_ITEM_AGE_HOURS || '24' }}
+          DISABLE_NOTIFY: ${{ secrets.DISABLE_NOTIFY || '0' }}
+        run: python workers/run_cycle_facebook.py

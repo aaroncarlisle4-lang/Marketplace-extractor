@@ -16,6 +16,12 @@ function formatAge(ageMinutes: number): string {
   return `${hours}h ${minutes}m`;
 }
 
+function sourceLabel(source: string): string {
+  if (source === "facebook_marketplace_uk") return "Facebook Marketplace";
+  if (source === "vinted_uk") return "Vinted UK";
+  return source;
+}
+
 export const sendListingAlert = internalAction({
   args: {
     listing: v.object({
@@ -49,7 +55,7 @@ export const sendListingAlert = internalAction({
         : "unknown";
 
     const message = [
-      `[${args.match.freshnessBucket}] Patagonia R1`,
+      `[${args.match.freshnessBucket}] ${sourceLabel(args.listing.source)}`,
       args.listing.title,
       `Price: ${price}`,
       `Condition: ${args.listing.condition ?? "unknown"}`,

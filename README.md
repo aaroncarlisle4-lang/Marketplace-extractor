@@ -5,6 +5,12 @@ Patagonia screener + notifier for Vinted UK using:
 - Convex for ingestion, screening, dedupe, and state
 - Telegram for notifications
 
+Also includes a Facebook Marketplace pipeline for:
+- `captain's chair`
+- `chesterfield captain chair`
+- Belfast radius filter (40 miles)
+- Recent-only matches (up to 24h old; notifications prioritize <= 5 minutes)
+
 ## What it does
 - Scrapes multiple Vinted UK Patagonia queries every cycle (including `r1`, `torrentshell`, `h2no`, `goretex`, and `ski jacket`).
 - Screens listings using strict rules:
@@ -22,6 +28,8 @@ Patagonia screener + notifier for Vinted UK using:
 ## Project layout
 - `workers/vinted_scraper.py`: Selenium scraper implementation
 - `workers/run_cycle.py`: scrape -> ingest -> notify cycle
+- `workers/facebook_scraper.py`: Facebook Marketplace scraper implementation
+- `workers/run_cycle_facebook.py`: Facebook scrape -> ingest -> notify cycle
 - `convex/schema.ts`: Convex tables/indexes
 - `convex/ingest.ts`: listing upsert + screening persistence
 - `convex/jobs.ts`: pending notification processing
@@ -63,8 +71,14 @@ python -m pip install -r workers/requirements.txt
 python workers/run_cycle.py
 ```
 
+7. Run the Facebook cycle manually:
+```bash
+python workers/run_cycle_facebook.py
+```
+
 ## GitHub Actions automation
 Workflow file: `.github/workflows/vinted-cycle.yml`
+Workflow file: `.github/workflows/facebook-cycle.yml`
 
 Set these repository secrets:
 - `CONVEX_SITE_URL`
@@ -77,6 +91,14 @@ Set these repository secrets:
 - `PAGE_LOAD_TIMEOUT_SECONDS` (optional, defaults to `12`)
 - `MAX_RUNTIME_SECONDS` (optional, defaults to `120`)
 - `DISABLE_NOTIFY` (optional, defaults to `0` so notifications send immediately)
+
+For Facebook workflow (`facebook-cycle.yml`), set:
+- `CONVEX_SITE_URL_FACEBOOK`
+- `INGEST_SHARED_SECRET_FACEBOOK`
+- `FACEBOOK_QUERIES` (optional)
+- `FACEBOOK_TARGET_TERMS` (optional)
+- `FACEBOOK_LOCATION_SLUG` (optional, default `belfast`)
+- `FACEBOOK_RADIUS_MILES` (optional, default `40`)
 
 The workflow runs every 5 minutes.
 With `DISABLE_NOTIFY=1`, it keeps ingesting and screening in Convex without Telegram sends.

@@ -7,6 +7,7 @@
     "convex:dev": "npx convex dev",
     "convex:deploy": "npx convex deploy",
     "worker:run": "python workers/run_cycle.py",
+    "worker:run:facebook": "python workers/run_cycle_facebook.py",
     "test": "echo \"No tests configured yet\""
   },
   "repository": {
