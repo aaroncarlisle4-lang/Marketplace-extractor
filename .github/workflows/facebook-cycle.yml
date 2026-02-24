@@ -34,8 +34,8 @@ jobs:
 
       - name: Run facebook worker cycle
         env:
-          CONVEX_SITE_URL: ${{ secrets.CONVEX_SITE_URL_FACEBOOK }}
-          INGEST_SHARED_SECRET: ${{ secrets.INGEST_SHARED_SECRET_FACEBOOK }}
+          CONVEX_SITE_URL: ${{ secrets.CONVEX_SITE_URL_FACEBOOK || secrets.CONVEX_SITE_URL }}
+          INGEST_SHARED_SECRET: ${{ secrets.INGEST_SHARED_SECRET_FACEBOOK || secrets.INGEST_SHARED_SECRET }}
           FACEBOOK_QUERIES: ${{ secrets.FACEBOOK_QUERIES || 'captains chair,chesterfield captain chair' }}
           FACEBOOK_TARGET_TERMS: ${{ secrets.FACEBOOK_TARGET_TERMS || 'captains chair,captain chair,chesterfield captain chair' }}
           FACEBOOK_LOCATION_SLUG: ${{ secrets.FACEBOOK_LOCATION_SLUG || 'belfast' }}
