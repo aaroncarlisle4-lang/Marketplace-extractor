@@ -1,17 +1,17 @@
 # Marketplace Extractor
 
-Patagonia R1 screener + notifier for Vinted UK using:
+Patagonia screener + notifier for Vinted UK using:
 - Python Selenium worker for scraping
 - Convex for ingestion, screening, dedupe, and state
 - Telegram for notifications
 
 ## What it does
-- Scrapes Vinted UK query `patagonia r1` every cycle.
+- Scrapes multiple Vinted UK Patagonia queries every cycle (including `r1`, `torrentshell`, `h2no`, `goretex`, and `ski jacket`).
 - Screens listings using strict rules:
   - brand contains Patagonia
-  - model contains `r1` (Regulator-only titles without `r1` are rejected)
+  - model/title contains one of the configured target terms
   - category + condition allowlists
-  - price <= `£50` (5000 pence)
+  - price <= `£50` (5000 pence) for each individual listing
   - published within last 24 hours
 - Prioritizes freshness tiers:
   - `HOT` < 10 min
@@ -70,6 +70,9 @@ Set these repository secrets:
 - `CONVEX_SITE_URL`
 - `INGEST_SHARED_SECRET`
 - `VINTED_QUERY` (optional, defaults to `patagonia r1`)
+- `VINTED_QUERIES` (optional, comma-separated query list for multi-product search)
+- `VINTED_TARGET_TERMS` (optional, comma-separated model/keyword terms)
+- `STRICT_TARGET_ONLY` (optional, defaults to `1`)
 - `MAX_PAGES` (optional, defaults to `1`)
 - `PAGE_LOAD_TIMEOUT_SECONDS` (optional, defaults to `12`)
 - `MAX_RUNTIME_SECONDS` (optional, defaults to `120`)

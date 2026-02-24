@@ -9,6 +9,23 @@ from dotenv import load_dotenv
 
 from vinted_scraper import scrape_vinted_listings_with_stats
 
+DEFAULT_VINTED_QUERIES = [
+    "patagonia r1",
+    "patagonia torrentshell jacket",
+    "patagonia h2no",
+    "patagonia goretex",
+    "patagonia ski jacket",
+]
+
+DEFAULT_TARGET_TERMS = [
+    "r1",
+    "torrentshell",
+    "h2no",
+    "goretex",
+    "gore-tex",
+    "ski jacket",
+]
+
 
 def require_env(name: str) -> str:
     value = os.getenv(name)
@@ -31,6 +48,13 @@ def drop_none_values(obj: Any) -> Any:
     if isinstance(obj, list):
         return [drop_none_values(v) for v in obj]
     return obj
+
+
+def parse_list_env(value: str | None) -> List[str]:
+    if not value:
+        return []
+    parts = [part.strip() for part in value.replace("\n", ",").split(",")]
+    return [part for part in parts if part]
 
 
 def post_json(url: str, secret: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -61,25 +85,65 @@ def main() -> int:
     convex_site_url = normalize_url_env(require_env("CONVEX_SITE_URL"))
     ingest_secret = require_env("INGEST_SHARED_SECRET")
 
-    query = os.getenv("VINTED_QUERY", "patagonia r1")
+    queries = parse_list_env(os.getenv("VINTED_QUERIES"))
+    if not queries:
+        single_query = os.getenv("VINTED_QUERY")
+        queries = [single_query] if single_query else DEFAULT_VINTED_QUERIES
+    queries = [q.strip() for q in queries if q.strip()]
+    if not queries:
+        raise RuntimeError("No Vinted queries configured")
+
+    target_terms = parse_list_env(os.getenv("VINTED_TARGET_TERMS"))
+    if not target_terms:
+        target_terms = DEFAULT_TARGET_TERMS
+
+    strict_target_only = os.getenv("STRICT_TARGET_ONLY", "1").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
     max_pages = int(os.getenv("MAX_PAGES", "3"))
     page_load_timeout_seconds = int(os.getenv("PAGE_LOAD_TIMEOUT_SECONDS", "20"))
     max_runtime_seconds = int(os.getenv("MAX_RUNTIME_SECONDS", "240"))
     max_item_age_hours = int(os.getenv("MAX_ITEM_AGE_HOURS", "24"))
     disable_notify = os.getenv("DISABLE_NOTIFY", "1").strip().lower() in {"1", "true", "yes", "on"}
 
-    scrape_result = scrape_vinted_listings_with_stats(
-        query=query,
-        max_pages=max_pages,
-        page_load_timeout_seconds=page_load_timeout_seconds,
-        max_runtime_seconds=max_runtime_seconds,
-        max_item_age_hours=max_item_age_hours,
-    )
-    listings: List[Dict[str, Any]] = drop_none_values(scrape_result["listings"])
+    per_query_runtime_seconds = max(30, int(max_runtime_seconds / max(1, len(queries))))
+    deduped_listings: Dict[str, Dict[str, Any]] = {}
+    scrape_results_by_query: List[Dict[str, Any]] = []
+
+    for query in queries:
+        scrape_result = scrape_vinted_listings_with_stats(
+            query=query,
+            max_pages=max_pages,
+            page_load_timeout_seconds=page_load_timeout_seconds,
+            max_runtime_seconds=per_query_runtime_seconds,
+            max_item_age_hours=max_item_age_hours,
+            strict_target_only=strict_target_only,
+            target_terms=target_terms,
+        )
+        listings_for_query: List[Dict[str, Any]] = drop_none_values(scrape_result["listings"])
+        scrape_results_by_query.append(
+            {
+                "query": query,
+                "scraped": len(listings_for_query),
+                "stats": scrape_result["stats"],
+            }
+        )
+        for listing in listings_for_query:
+            key = f"{listing.get('source', 'unknown')}:{listing.get('listingId', '')}"
+            deduped_listings[key] = listing
+
+    listings = list(deduped_listings.values())
     if not listings:
         print(json.dumps({
             "scraped": 0,
-            "scrape_stats": scrape_result["stats"],
+            "queries": queries,
+            "target_terms": target_terms,
+            "strict_target_only": strict_target_only,
+            "scrape_by_query": scrape_results_by_query,
             "ingest": None,
             "notify": None,
         }, indent=2))
@@ -91,13 +155,16 @@ def main() -> int:
     ingest_result = post_json(ingest_url, ingest_secret, {"listings": listings})
     notify_result = None
     if not disable_notify:
-        notify_result = post_json(notify_url, ingest_secret, {"limit": 25})
+        notify_result = post_json(notify_url, ingest_secret, {"limit": 100})
     else:
         notify_result = {"disabled": True, "reason": "DISABLE_NOTIFY is enabled"}
 
     print(json.dumps({
         "scraped": len(listings),
-        "scrape_stats": scrape_result["stats"],
+        "queries": queries,
+        "target_terms": target_terms,
+        "strict_target_only": strict_target_only,
+        "scrape_by_query": scrape_results_by_query,
         "screen_only_mode": disable_notify,
         "ingest": ingest_result,
         "notify": notify_result,

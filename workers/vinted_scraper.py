@@ -2,7 +2,7 @@ import json
 import os
 import re
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from time import monotonic
 from typing import Dict, List, Optional
@@ -57,6 +57,15 @@ DICT_CONDITION = {
     "satisfactory": "status[]=4",
 }
 
+DEFAULT_TARGET_TERMS = [
+    "r1",
+    "torrentshell",
+    "h2no",
+    "goretex",
+    "gore-tex",
+    "ski jacket",
+]
+
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -103,7 +112,8 @@ class ScrapeConfig:
     max_pages: int = 3
     order: str = "most recent first"
     catalog: str = "men"
-    strict_r1_only: bool = True
+    strict_target_only: bool = True
+    target_terms: List[str] = field(default_factory=lambda: DEFAULT_TARGET_TERMS.copy())
     page_load_timeout_seconds: int = 20
     max_runtime_seconds: int = 240
     max_item_age_hours: int = 24
@@ -129,7 +139,7 @@ class VintedScraper:
             "pages_scanned": 0,
             "page_link_count": 0,
             "listing_errors": 0,
-            "listing_skipped_not_r1": 0,
+            "listing_skipped_not_target": 0,
             "listing_skipped_missing_published_at": 0,
             "listing_skipped_stale_24h": 0,
         }
@@ -305,12 +315,18 @@ class VintedScraper:
             return None
         return record
 
-    def _is_strict_r1(self, item: Dict) -> bool:
+    def _is_target_match(self, item: Dict, target_terms: List[str]) -> bool:
         brand = str(item.get("brand") or "").lower()
         title = str(item.get("title") or "").lower()
         description = str(item.get("description") or "").lower()
-        text = f"{title} {description}"
-        return "patagonia" in brand and bool(re.search(r"\br1\b", text))
+        text = f"{brand} {title} {description}"
+
+        normalized_text = re.sub(r"[^a-z0-9]+", " ", text).strip()
+        for term in target_terms:
+            normalized_term = re.sub(r"[^a-z0-9]+", " ", term.lower()).strip()
+            if normalized_term and normalized_term in normalized_text:
+                return True
+        return False
 
     def _record_from_embedded_item(self, item: Dict) -> Optional[Dict]:
         listing_id = item.get("id")
@@ -382,8 +398,8 @@ class VintedScraper:
                 if listing_id in seen:
                     continue
                 seen.add(listing_id)
-                if config.strict_r1_only and not self._is_strict_r1(record):
-                    self.stats["listing_skipped_not_r1"] += 1
+                if config.strict_target_only and not self._is_target_match(record, config.target_terms):
+                    self.stats["listing_skipped_not_target"] += 1
                     continue
                 published_at = record.get("publishedAt")
                 if not published_at:
@@ -418,12 +434,16 @@ def scrape_vinted_listings_with_stats(
     page_load_timeout_seconds: int = 20,
     max_runtime_seconds: int = 240,
     max_item_age_hours: int = 24,
+    strict_target_only: bool = True,
+    target_terms: Optional[List[str]] = None,
 ) -> Dict:
     scraper = VintedScraper(page_load_timeout_seconds=page_load_timeout_seconds)
     try:
         config = ScrapeConfig(
             query=query,
             max_pages=max_pages,
+            strict_target_only=strict_target_only,
+            target_terms=(target_terms or DEFAULT_TARGET_TERMS.copy()),
             page_load_timeout_seconds=page_load_timeout_seconds,
             max_runtime_seconds=max_runtime_seconds,
             max_item_age_hours=max_item_age_hours,

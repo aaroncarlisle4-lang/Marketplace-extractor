@@ -37,6 +37,9 @@ jobs:
           CONVEX_SITE_URL: ${{ secrets.CONVEX_SITE_URL }}
           INGEST_SHARED_SECRET: ${{ secrets.INGEST_SHARED_SECRET }}
           VINTED_QUERY: ${{ secrets.VINTED_QUERY || 'patagonia r1' }}
+          VINTED_QUERIES: ${{ secrets.VINTED_QUERIES || 'patagonia r1,patagonia torrentshell jacket,patagonia h2no,patagonia goretex,patagonia ski jacket' }}
+          VINTED_TARGET_TERMS: ${{ secrets.VINTED_TARGET_TERMS || 'r1,torrentshell,h2no,goretex,gore-tex,ski jacket' }}
+          STRICT_TARGET_ONLY: ${{ secrets.STRICT_TARGET_ONLY || '1' }}
           MAX_PAGES: ${{ secrets.MAX_PAGES || '1' }}
           PAGE_LOAD_TIMEOUT_SECONDS: ${{ secrets.PAGE_LOAD_TIMEOUT_SECONDS || '12' }}
           MAX_RUNTIME_SECONDS: ${{ secrets.MAX_RUNTIME_SECONDS || '120' }}

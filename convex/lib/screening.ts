@@ -2,6 +2,14 @@ import type { FreshnessBucket, ListingInput, MatchResult } from "./types";
 
 const MAX_PRICE_MINOR = 5000;
 const RECENT_NOTIFY_MIN_SCORE = 35;
+const TARGET_MODEL_PATTERNS = [
+  "r1",
+  "torrentshell",
+  "h2no",
+  "goretex",
+  "gore-tex",
+  "ski jacket",
+];
 
 const ALLOWED_CONDITION_PATTERNS = [
   "new with tags",
@@ -43,11 +51,11 @@ export function screenListing(
   const brandOk = (listing.brand ?? "").toLowerCase().includes("patagonia");
   if (!brandOk) reasons.push("brand_not_patagonia");
 
-  const titleBlob = `${listing.title} ${listing.description ?? ""}`.toLowerCase();
-  const modelOk = /\br1\b/.test(titleBlob);
-  if (!modelOk) reasons.push("missing_r1_model");
-  if (!modelOk && /\bregulator\b/.test(titleBlob)) {
-    reasons.push("regulator_without_r1");
+  const targetBlob = `${listing.brand ?? ""} ${listing.title} ${listing.description ?? ""}`.toLowerCase();
+  const modelOk = includesAny(targetBlob, TARGET_MODEL_PATTERNS);
+  if (!modelOk) reasons.push("missing_target_model");
+  if (!modelOk && /\bregulator\b/.test(targetBlob)) {
+    reasons.push("regulator_without_target_model");
   }
 
   const categoryOk = includesAny(listing.category, ALLOWED_CATEGORY_PATTERNS);
