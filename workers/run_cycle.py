@@ -108,7 +108,7 @@ def main() -> int:
     page_load_timeout_seconds = int(os.getenv("PAGE_LOAD_TIMEOUT_SECONDS", "20"))
     max_runtime_seconds = int(os.getenv("MAX_RUNTIME_SECONDS", "240"))
     max_item_age_hours = int(os.getenv("MAX_ITEM_AGE_HOURS", "24"))
-    disable_notify = os.getenv("DISABLE_NOTIFY", "1").strip().lower() in {"1", "true", "yes", "on"}
+    disable_notify = os.getenv("DISABLE_NOTIFY", "0").strip().lower() in {"1", "true", "yes", "on"}
 
     per_query_runtime_seconds = max(30, int(max_runtime_seconds / max(1, len(queries))))
     deduped_listings: Dict[str, Dict[str, Any]] = {}

@@ -44,5 +44,5 @@ jobs:
           PAGE_LOAD_TIMEOUT_SECONDS: ${{ secrets.PAGE_LOAD_TIMEOUT_SECONDS || '12' }}
           MAX_RUNTIME_SECONDS: ${{ secrets.MAX_RUNTIME_SECONDS || '120' }}
           MAX_ITEM_AGE_HOURS: ${{ secrets.MAX_ITEM_AGE_HOURS || '24' }}
-          DISABLE_NOTIFY: ${{ secrets.DISABLE_NOTIFY || '0' }}
+          DISABLE_NOTIFY: ${{ secrets.DISABLE_NOTIFY_VINTED || '0' }}
         run: python workers/run_cycle.py
