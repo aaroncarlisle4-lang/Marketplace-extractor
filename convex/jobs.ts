@@ -28,7 +28,7 @@ export const runNotificationPass = internalAction({
 
     try {
       const pending = await ctx.runQuery(internal.jobs.getPendingMatches, {
-        limit: args.limit ?? 25,
+        limit: args.limit ?? 100,
       });
 
       for (const item of pending) {
@@ -173,7 +173,7 @@ export const getPendingMatches = internalQuery({
       .query("matches")
       .withIndex("by_eligible", (q) => q.eq("eligibleForNotify", true))
       .order("desc")
-      .take(args.limit * 4);
+      .take(args.limit * 12);
 
     const out: Array<{
       source: string;

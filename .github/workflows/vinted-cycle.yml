@@ -8,10 +8,10 @@ on:
 jobs:
   run-cycle:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     concurrency:
       group: vinted-cycle
-      cancel-in-progress: false
+      cancel-in-progress: true
 
     steps:
       - name: Checkout
@@ -21,6 +21,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: workers/requirements.txt
 
       - name: Install Chrome
         uses: browser-actions/setup-chrome@v1
@@ -36,8 +38,8 @@ jobs:
           INGEST_SHARED_SECRET: ${{ secrets.INGEST_SHARED_SECRET }}
           VINTED_QUERY: ${{ secrets.VINTED_QUERY || 'patagonia r1' }}
           MAX_PAGES: ${{ secrets.MAX_PAGES || '1' }}
-          PAGE_LOAD_TIMEOUT_SECONDS: ${{ secrets.PAGE_LOAD_TIMEOUT_SECONDS || '15' }}
-          MAX_RUNTIME_SECONDS: ${{ secrets.MAX_RUNTIME_SECONDS || '180' }}
+          PAGE_LOAD_TIMEOUT_SECONDS: ${{ secrets.PAGE_LOAD_TIMEOUT_SECONDS || '12' }}
+          MAX_RUNTIME_SECONDS: ${{ secrets.MAX_RUNTIME_SECONDS || '120' }}
           MAX_ITEM_AGE_HOURS: ${{ secrets.MAX_ITEM_AGE_HOURS || '24' }}
-          DISABLE_NOTIFY: ${{ secrets.DISABLE_NOTIFY || '1' }}
+          DISABLE_NOTIFY: ${{ secrets.DISABLE_NOTIFY || '0' }}
         run: python workers/run_cycle.py

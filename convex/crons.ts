@@ -5,9 +5,9 @@ const crons = cronJobs();
 
 crons.interval(
   "run pending notification pass",
-  { minutes: 5 },
+  { minutes: 1 },
   internal.jobs.runNotificationPass,
-  { limit: 25 },
+  { limit: 100 },
 );
 
 export default crons;
