@@ -1,7 +1,15 @@
 import type { FreshnessBucket, ListingInput, MatchResult } from "./types";
 
-const VINTED_MAX_PRICE_MINOR = 5000;
-const RECENT_NOTIFY_MIN_SCORE = 35;
+function envNumber(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return parsed;
+}
+
+const VINTED_MAX_PRICE_MINOR = envNumber("VINTED_MAX_PRICE_MINOR", 5000);
+const RECENT_NOTIFY_MIN_SCORE = envNumber("RECENT_NOTIFY_MIN_SCORE", 35);
 const VINTED_TARGET_MODEL_PATTERNS = [
   "r1",
   "torrentshell",
