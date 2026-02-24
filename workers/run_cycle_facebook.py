@@ -29,6 +29,15 @@ def require_env(name: str) -> str:
     return value
 
 
+def require_any_env(*names: str) -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value:
+            return value
+    joined = ", ".join(names)
+    raise RuntimeError(f"Missing required env var (any of): {joined}")
+
+
 def normalize_url_env(value: str) -> str:
     cleaned = "".join(value.split()).rstrip("/")
     if not cleaned.startswith("http://") and not cleaned.startswith("https://"):
@@ -76,8 +85,13 @@ def post_json(url: str, secret: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 def main() -> int:
     load_dotenv()
 
-    convex_site_url = normalize_url_env(require_env("CONVEX_SITE_URL"))
-    ingest_secret = require_env("INGEST_SHARED_SECRET")
+    convex_site_url = normalize_url_env(
+        require_any_env("CONVEX_SITE_URL", "CONVEX_SITE_URL_FACEBOOK")
+    )
+    ingest_secret = require_any_env(
+        "INGEST_SHARED_SECRET",
+        "INGEST_SHARED_SECRET_FACEBOOK",
+    )
 
     queries = parse_list_env(os.getenv("FACEBOOK_QUERIES")) or DEFAULT_FACEBOOK_QUERIES
     target_terms = parse_list_env(os.getenv("FACEBOOK_TARGET_TERMS")) or DEFAULT_FACEBOOK_TARGET_TERMS
