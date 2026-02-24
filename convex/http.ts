@@ -61,7 +61,19 @@ http.route({
         skipped: 0,
       });
 
-      return new Response(JSON.stringify(result), {
+      let notify: unknown = null;
+      try {
+        notify = await ctx.runAction(internal.jobs.runNotificationPass, {
+          limit: 100,
+        });
+      } catch (notifyErr) {
+        notify = {
+          error:
+            notifyErr instanceof Error ? notifyErr.message : "notify_after_ingest_failed",
+        };
+      }
+
+      return new Response(JSON.stringify({ ...result, notify }), {
         status: 200,
         headers: { "content-type": "application/json" },
       });

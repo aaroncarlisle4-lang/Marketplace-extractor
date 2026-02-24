@@ -3,6 +3,10 @@ import { internal } from "./_generated/api";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 
 const NOTIFY_MAX_ATTEMPTS = 5;
+const NOTIFY_RESEND_COOLDOWN_MINUTES = Math.max(
+  0,
+  Number.parseInt(process.env.NOTIFY_RESEND_COOLDOWN_MINUTES ?? "180", 10) || 0,
+);
 
 function keyFor(source: string, listingId: string): string {
   return `${source}:${listingId}`;
@@ -13,7 +17,16 @@ export const runNotificationPass = internalAction({
   handler: async (ctx, args) => {
     const disableNotify = (process.env.DISABLE_NOTIFY ?? "0").toLowerCase();
     if (["1", "true", "yes", "on"].includes(disableNotify)) {
-      return { sent: 0, failed: 0, skipped: 0, pending: 0, disabled: true };
+      return {
+        sent: 0,
+        failed: 0,
+        skipped: 0,
+        pending: 0,
+        disabled: true,
+        skippedAlreadySent: 0,
+        skippedMaxAttempts: 0,
+        resendCooldownMinutes: NOTIFY_RESEND_COOLDOWN_MINUTES,
+      };
     }
 
     const startedAtMs = Date.now();
@@ -25,6 +38,8 @@ export const runNotificationPass = internalAction({
     let sent = 0;
     let failed = 0;
     let skipped = 0;
+    let skippedAlreadySent = 0;
+    let skippedMaxAttempts = 0;
 
     try {
       const pending = await ctx.runQuery(internal.jobs.getPendingMatches, {
@@ -38,11 +53,19 @@ export const runNotificationPass = internalAction({
           idempotencyKey,
         });
         if (existing?.status === "sent") {
-          skipped += 1;
-          continue;
+          const sentAtMs = existing.sentAtMs ?? 0;
+          const resendAfterMs = NOTIFY_RESEND_COOLDOWN_MINUTES * 60 * 1000;
+          const canResend =
+            resendAfterMs > 0 && sentAtMs > 0 && Date.now() - sentAtMs >= resendAfterMs;
+          if (!canResend) {
+            skipped += 1;
+            skippedAlreadySent += 1;
+            continue;
+          }
         }
         if (existing?.status === "failed" && existing.attempts >= NOTIFY_MAX_ATTEMPTS) {
           skipped += 1;
+          skippedMaxAttempts += 1;
           continue;
         }
 
@@ -98,7 +121,15 @@ export const runNotificationPass = internalAction({
         skipped,
       });
 
-      return { sent, failed, skipped, pending: pending.length };
+      return {
+        sent,
+        failed,
+        skipped,
+        pending: pending.length,
+        skippedAlreadySent,
+        skippedMaxAttempts,
+        resendCooldownMinutes: NOTIFY_RESEND_COOLDOWN_MINUTES,
+      };
     } catch (err) {
       await ctx.runMutation(internal.jobs.finishRun, {
         runId,
