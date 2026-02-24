@@ -139,6 +139,7 @@ class VintedScraper:
             "pages_scanned": 0,
             "page_link_count": 0,
             "listing_errors": 0,
+            "listing_pages_scraped": 0,
             "listing_skipped_not_target": 0,
             "listing_skipped_missing_published_at": 0,
             "listing_skipped_stale_24h": 0,
@@ -379,6 +380,32 @@ class VintedScraper:
         now_ts = datetime.now(timezone.utc).timestamp()
         max_age_minutes = config.max_item_age_hours * 60
 
+        def maybe_add_record(record: Optional[Dict]) -> None:
+            if not record:
+                self.stats["listing_errors"] += 1
+                return
+            listing_id = record["listingId"]
+            if listing_id in seen:
+                return
+            seen.add(listing_id)
+            if config.strict_target_only and not self._is_target_match(record, config.target_terms):
+                self.stats["listing_skipped_not_target"] += 1
+                return
+            published_at = record.get("publishedAt")
+            if not published_at:
+                self.stats["listing_skipped_missing_published_at"] += 1
+                return
+            try:
+                published_ts = datetime.fromisoformat(published_at).timestamp()
+            except Exception:
+                self.stats["listing_skipped_missing_published_at"] += 1
+                return
+            age_minutes = max(0, int((now_ts - published_ts) / 60))
+            if age_minutes > max_age_minutes:
+                self.stats["listing_skipped_stale_24h"] += 1
+                return
+            listings.append(record)
+
         for page in range(1, config.max_pages + 1):
             if monotonic() - started > config.max_runtime_seconds:
                 self.stats["stopped_reason"] = "max_runtime_reached"
@@ -386,35 +413,23 @@ class VintedScraper:
             self.stats["pages_scanned"] += 1
             search_url = build_search_url(config.query, criteria, page)
             items = self._extract_embedded_items(search_url)
-            for raw_item in items:
+            if items:
+                for raw_item in items:
+                    if monotonic() - started > config.max_runtime_seconds:
+                        self.stats["stopped_reason"] = "max_runtime_reached"
+                        return listings
+                    record = self._record_from_embedded_item(raw_item)
+                    maybe_add_record(record)
+                continue
+
+            listing_urls = self._extract_listing_urls(search_url)
+            for listing_url in listing_urls:
                 if monotonic() - started > config.max_runtime_seconds:
                     self.stats["stopped_reason"] = "max_runtime_reached"
                     return listings
-                record = self._record_from_embedded_item(raw_item)
-                if not record:
-                    self.stats["listing_errors"] += 1
-                    continue
-                listing_id = record["listingId"]
-                if listing_id in seen:
-                    continue
-                seen.add(listing_id)
-                if config.strict_target_only and not self._is_target_match(record, config.target_terms):
-                    self.stats["listing_skipped_not_target"] += 1
-                    continue
-                published_at = record.get("publishedAt")
-                if not published_at:
-                    self.stats["listing_skipped_missing_published_at"] += 1
-                    continue
-                try:
-                    published_ts = datetime.fromisoformat(published_at).timestamp()
-                except Exception:
-                    self.stats["listing_skipped_missing_published_at"] += 1
-                    continue
-                age_minutes = max(0, int((now_ts - published_ts) / 60))
-                if age_minutes > max_age_minutes:
-                    self.stats["listing_skipped_stale_24h"] += 1
-                    continue
-                listings.append(record)
+                self.stats["listing_pages_scraped"] += 1
+                record = self.scrape_listing(listing_url)
+                maybe_add_record(record)
 
         return listings
 
