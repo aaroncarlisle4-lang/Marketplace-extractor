@@ -37,6 +37,7 @@ jobs:
           CONVEX_SITE_URL: ${{ secrets.CONVEX_SITE_URL_FACEBOOK || secrets.CONVEX_SITE_URL }}
           INGEST_SHARED_SECRET: ${{ secrets.INGEST_SHARED_SECRET_FACEBOOK || secrets.INGEST_SHARED_SECRET }}
           FACEBOOK_QUERIES: ${{ secrets.FACEBOOK_QUERIES || 'captains chair,chesterfield captain chair' }}
+          FACEBOOK_LISTING_URLS: ${{ secrets.FACEBOOK_LISTING_URLS || '' }}
           FACEBOOK_TARGET_TERMS: ${{ secrets.FACEBOOK_TARGET_TERMS || 'captains chair,captain chair,chesterfield captain chair' }}
           FACEBOOK_LOCATION_SLUG: ${{ secrets.FACEBOOK_LOCATION_SLUG || 'belfast' }}
           FACEBOOK_RADIUS_MILES: ${{ secrets.FACEBOOK_RADIUS_MILES || '40' }}
@@ -46,4 +47,13 @@ jobs:
           MAX_RUNTIME_SECONDS: ${{ secrets.MAX_RUNTIME_SECONDS || '180' }}
           MAX_ITEM_AGE_HOURS: ${{ secrets.MAX_ITEM_AGE_HOURS || '24' }}
           DISABLE_NOTIFY: ${{ secrets.DISABLE_NOTIFY || '0' }}
+          FB_DEBUG_DIR: /tmp/fb_debug
         run: python workers/run_cycle_facebook.py
+
+      - name: Upload Facebook debug artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: facebook-debug-${{ github.run_id }}
+          path: /tmp/fb_debug
+          if-no-files-found: ignore

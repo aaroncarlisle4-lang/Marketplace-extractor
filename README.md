@@ -96,6 +96,7 @@ For Facebook workflow (`facebook-cycle.yml`), set:
 - `CONVEX_SITE_URL_FACEBOOK`
 - `INGEST_SHARED_SECRET_FACEBOOK`
 - `FACEBOOK_QUERIES` (optional)
+- `FACEBOOK_LISTING_URLS` (optional, comma-separated direct listing URLs; bypasses search discovery)
 - `FACEBOOK_TARGET_TERMS` (optional)
 - `FACEBOOK_LOCATION_SLUG` (optional, default `belfast`)
 - `FACEBOOK_RADIUS_MILES` (optional, default `40`)

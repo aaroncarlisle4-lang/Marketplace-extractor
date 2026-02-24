@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import urllib.parse
 from dataclasses import dataclass, field
@@ -150,6 +151,9 @@ class FacebookMarketplaceScraper:
             "listing_skipped_missing_published_at": 0,
             "listing_skipped_stale_24h": 0,
         }
+        self.debug_dir = os.getenv("FB_DEBUG_DIR", "").strip()
+        if self.debug_dir:
+            os.makedirs(self.debug_dir, exist_ok=True)
 
     def close(self) -> None:
         self.driver.quit()
@@ -171,6 +175,15 @@ class FacebookMarketplaceScraper:
                 return True
         return False
 
+    def _debug_write(self, name: str, content: str) -> None:
+        if not self.debug_dir:
+            return
+        try:
+            with open(os.path.join(self.debug_dir, name), "w", encoding="utf-8") as fp:
+                fp.write(content)
+        except Exception:
+            pass
+
     @retry(wait=wait_exponential(multiplier=1, min=1, max=8), stop=stop_after_attempt(3))
     def _collect_listing_urls(self, search_url: str, max_pages: int) -> List[str]:
         try:
@@ -185,6 +198,9 @@ class FacebookMarketplaceScraper:
             self.wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'a[href*="/marketplace/item/"]')))
         except TimeoutException:
             pass
+        self.stats["search_page_title"] = self.driver.title
+        self._debug_write("search_page_title.txt", self.driver.title or "")
+        self._debug_write("search_page_source.html", self.driver.page_source)
 
         seen = set()
         out: List[str] = []
@@ -203,6 +219,14 @@ class FacebookMarketplaceScraper:
             sleep(1.2)
 
         self.stats["page_link_count"] += len(out)
+        self.stats["search_url"] = search_url
+        self.stats["discovered_links"] = len(out)
+        if self.debug_dir:
+            self._debug_write("discovered_links.json", json.dumps(out[:200], indent=2))
+            try:
+                self.driver.save_screenshot(os.path.join(self.debug_dir, "search_screenshot.png"))
+            except Exception:
+                pass
         return out
 
     @retry(wait=wait_exponential(multiplier=1, min=1, max=8), stop=stop_after_attempt(3))
@@ -258,6 +282,9 @@ class FacebookMarketplaceScraper:
 
         if not record["listingId"] or not record["url"]:
             return None
+        if self.debug_dir:
+            safe_id = record["listingId"].replace("/", "_")
+            self._debug_write(f"listing_{safe_id}.json", json.dumps(record, indent=2))
         return record
 
     def run(self, config: FacebookScrapeConfig) -> List[Dict]:
@@ -335,6 +362,60 @@ def scrape_facebook_listings_with_stats(
             max_item_age_hours=max_item_age_hours,
         )
         listings = scraper.run(config)
+        return {"listings": listings, "stats": scraper.stats}
+    finally:
+        scraper.close()
+
+
+def scrape_facebook_listing_urls_with_stats(
+    urls: List[str],
+    page_load_timeout_seconds: int = 20,
+    max_runtime_seconds: int = 180,
+    max_item_age_hours: int = 24,
+    strict_target_only: bool = True,
+    target_terms: Optional[List[str]] = None,
+) -> Dict:
+    scraper = FacebookMarketplaceScraper(page_load_timeout_seconds=page_load_timeout_seconds)
+    try:
+        started = monotonic()
+        now_ts = datetime.now(timezone.utc).timestamp()
+        max_age_minutes = max_item_age_hours * 60
+        listings: List[Dict] = []
+        seen = set()
+
+        terms = target_terms or DEFAULT_TARGET_TERMS.copy()
+        for url in urls:
+            if monotonic() - started > max_runtime_seconds:
+                scraper.stats["stopped_reason"] = "max_runtime_reached"
+                break
+            listing_id = scraper._extract_listing_id(url)
+            if listing_id in seen:
+                continue
+            seen.add(listing_id)
+            record = scraper.scrape_listing(url)
+            if not record:
+                scraper.stats["listing_errors"] += 1
+                continue
+            if strict_target_only and not scraper._is_target_match(record, terms):
+                scraper.stats["listing_skipped_not_target"] += 1
+                continue
+            published_at = record.get("publishedAt")
+            if not published_at:
+                scraper.stats["listing_skipped_missing_published_at"] += 1
+                continue
+            try:
+                published_ts = datetime.fromisoformat(published_at).timestamp()
+            except Exception:
+                scraper.stats["listing_skipped_missing_published_at"] += 1
+                continue
+            age_minutes = max(0, int((now_ts - published_ts) / 60))
+            if age_minutes > max_age_minutes:
+                scraper.stats["listing_skipped_stale_24h"] += 1
+                continue
+            listings.append(record)
+
+        scraper.stats["provided_urls"] = len(urls)
+        scraper.stats["direct_url_mode"] = True
         return {"listings": listings, "stats": scraper.stats}
     finally:
         scraper.close()
