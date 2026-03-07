@@ -18,6 +18,7 @@ import type * as lib_screening from "../lib/screening.js";
 import type * as lib_types from "../lib/types.js";
 import type * as notifyTelegram from "../notifyTelegram.js";
 import type * as queries from "../queries.js";
+import type * as scrapeVinted from "../scrapeVinted.js";
 import type * as screen from "../screen.js";
 
 import type {
@@ -37,6 +38,7 @@ declare const fullApi: ApiFromModules<{
   "lib/types": typeof lib_types;
   notifyTelegram: typeof notifyTelegram;
   queries: typeof queries;
+  scrapeVinted: typeof scrapeVinted;
   screen: typeof screen;
 }>;
 
