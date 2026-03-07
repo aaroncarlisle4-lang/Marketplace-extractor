@@ -9,7 +9,6 @@ function envNumber(name: string, fallback: number): number {
 }
 
 const VINTED_MAX_PRICE_MINOR = envNumber("VINTED_MAX_PRICE_MINOR", 5000);
-const RECENT_NOTIFY_MIN_SCORE = envNumber("RECENT_NOTIFY_MIN_SCORE", 35);
 const VINTED_TARGET_MODEL_PATTERNS = [
   "r1",
   "torrentshell",
@@ -113,10 +112,7 @@ function screenVintedListing(
     brandOk && modelOk && categoryOk && conditionOk && in24h && priceOk;
 
   const eligibleForNotify =
-    isMatch &&
-    (freshnessBucket === "HOT" ||
-      freshnessBucket === "NEW" ||
-      (freshnessBucket === "RECENT" && score >= RECENT_NOTIFY_MIN_SCORE));
+    isMatch && (freshnessBucket === "HOT" || freshnessBucket === "NEW");
 
   return {
     isMatch,

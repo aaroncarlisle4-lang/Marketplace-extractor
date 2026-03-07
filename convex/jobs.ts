@@ -225,6 +225,12 @@ export const getPendingMatches = internalQuery({
       if (!listing || !match.isMatch || !match.eligibleForNotify) continue;
       if (match.freshnessBucket === "STALE") continue;
 
+      if (listing.publishedAtMs) {
+        const currentAgeMinutes = Math.floor((Date.now() - listing.publishedAtMs) / 60000);
+        const maxNotifyAgeMinutes = match.source === "facebook_marketplace_uk" ? 5 : 60;
+        if (currentAgeMinutes > maxNotifyAgeMinutes) continue;
+      }
+
       out.push({
         source: match.source,
         listingId: match.listingId,

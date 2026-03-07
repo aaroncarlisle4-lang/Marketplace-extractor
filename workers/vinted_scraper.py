@@ -116,7 +116,7 @@ class ScrapeConfig:
     target_terms: List[str] = field(default_factory=lambda: DEFAULT_TARGET_TERMS.copy())
     page_load_timeout_seconds: int = 20
     max_runtime_seconds: int = 240
-    max_item_age_hours: int = 24
+    max_item_age_hours: int = 2
 
 
 class VintedScraper:
