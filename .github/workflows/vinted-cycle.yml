@@ -12,7 +12,7 @@ jobs:
     timeout-minutes: 10
     concurrency:
       group: vinted-cycle
-      cancel-in-progress: true
+      cancel-in-progress: false
 
     steps:
       - name: Checkout
