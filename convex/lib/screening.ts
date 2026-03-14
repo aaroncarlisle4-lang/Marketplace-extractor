@@ -16,9 +16,7 @@ const VINTED_TARGET_MODEL_PATTERNS = [
   "shorts",
   "belted",
   "pile fleece",
-  "better sweater",
   "black hole",
-  "refugio",
   "duffel",
 ];
 const FACEBOOK_TARGET_PATTERNS = [

@@ -38,8 +38,8 @@ jobs:
           CONVEX_SITE_URL: ${{ secrets.CONVEX_SITE_URL }}
           INGEST_SHARED_SECRET: ${{ secrets.INGEST_SHARED_SECRET }}
           VINTED_QUERY: ${{ secrets.VINTED_QUERY || 'patagonia r1' }}
-          VINTED_QUERIES: ${{ secrets.VINTED_QUERIES || 'patagonia shorts,patagonia r1,patagonia torrentshell jacket,patagonia h2no,patagonia pile fleece,patagonia better sweater,patagonia black hole,patagonia refugio,patagonia duffel' }}
-          VINTED_TARGET_TERMS: ${{ secrets.VINTED_TARGET_TERMS || 'shorts,belted,r1,torrentshell,h2no,pile fleece,better sweater,black hole,refugio,duffel' }}
+          VINTED_QUERIES: ${{ secrets.VINTED_QUERIES || 'patagonia shorts,patagonia r1,patagonia torrentshell jacket,patagonia h2no,patagonia pile fleece,patagonia black hole,patagonia duffel' }}
+          VINTED_TARGET_TERMS: ${{ secrets.VINTED_TARGET_TERMS || 'shorts,belted,r1,torrentshell,h2no,pile fleece,black hole,duffel' }}
           STRICT_TARGET_ONLY: ${{ secrets.STRICT_TARGET_ONLY || '1' }}
           MAX_PAGES: ${{ secrets.MAX_PAGES || '10' }}
           PAGE_LOAD_TIMEOUT_SECONDS: ${{ secrets.PAGE_LOAD_TIMEOUT_SECONDS || '12' }}
