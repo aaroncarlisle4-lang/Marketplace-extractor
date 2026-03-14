@@ -227,6 +227,7 @@ export const getPendingMatches = internalQuery({
 
       if (listing.publishedAtMs) {
         const currentAgeMinutes = Math.floor((Date.now() - listing.publishedAtMs) / 60000);
+        // Strictly less than 1 hour for Vinted, less than 5m for Facebook.
         const maxNotifyAgeMinutes = match.source === "facebook_marketplace_uk" ? 5 : 60;
         if (currentAgeMinutes > maxNotifyAgeMinutes) continue;
       }

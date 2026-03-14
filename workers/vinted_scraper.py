@@ -59,11 +59,32 @@ DICT_CONDITION = {
 
 DEFAULT_TARGET_TERMS = [
     "r1",
+    "r2",
+    "r3",
     "torrentshell",
     "h2no",
     "goretex",
     "gore-tex",
     "ski jacket",
+    "jacket",
+    "fleece",
+    "synchilla",
+    "snap-t",
+    "better sweater",
+    "nano puff",
+    "micro puff",
+    "puffer",
+    "sweater",
+    "jumper",
+    "capilene",
+    "baggies",
+    "retro-x",
+    "das parka",
+    "down sweater",
+    "regulator",
+    "vest",
+    "gilet",
+    "parka",
 ]
 
 
@@ -322,6 +343,9 @@ class VintedScraper:
         description = str(item.get("description") or "").lower()
         text = f"{brand} {title} {description}"
 
+        if "patagonia" not in text:
+            return False
+
         normalized_text = re.sub(r"[^a-z0-9]+", " ", text).strip()
         for term in target_terms:
             normalized_term = re.sub(r"[^a-z0-9]+", " ", term.lower()).strip()
@@ -371,7 +395,6 @@ class VintedScraper:
     def run(self, config: ScrapeConfig) -> List[Dict]:
         criteria = define_criteria_query(
             order=[config.order],
-            catalog=[config.catalog],
             condition=["new with tags", "new without tags", "very good condition", "good condition"],
         )
         listings: List[Dict] = []
@@ -392,15 +415,14 @@ class VintedScraper:
                 self.stats["listing_skipped_not_target"] += 1
                 return
             published_at = record.get("publishedAt")
-            if not published_at:
-                self.stats["listing_skipped_missing_published_at"] += 1
-                return
-            try:
-                published_ts = datetime.fromisoformat(published_at).timestamp()
-            except Exception:
-                self.stats["listing_skipped_missing_published_at"] += 1
-                return
-            age_minutes = max(0, int((now_ts - published_ts) / 60))
+            age_minutes = 0
+            if published_at:
+                try:
+                    published_ts = datetime.fromisoformat(published_at).timestamp()
+                    age_minutes = max(0, int((now_ts - published_ts) / 60))
+                except Exception:
+                    pass
+            
             if age_minutes > max_age_minutes:
                 self.stats["listing_skipped_stale_24h"] += 1
                 return

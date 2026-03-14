@@ -11,11 +11,34 @@ function envNumber(name: string, fallback: number): number {
 const VINTED_MAX_PRICE_MINOR = envNumber("VINTED_MAX_PRICE_MINOR", 5000);
 const VINTED_TARGET_MODEL_PATTERNS = [
   "r1",
+  "r2",
+  "r3",
   "torrentshell",
   "h2no",
   "goretex",
   "gore-tex",
   "ski jacket",
+  "jacket",
+  "fleece",
+  "synchilla",
+  "snap-t",
+  "better sweater",
+  "nano puff",
+  "micro puff",
+  "puffer",
+  "sweater",
+  "jumper",
+  "capilene",
+  "baggies",
+  "shorts",
+  "belted",
+  "retro-x",
+  "das parka",
+  "down sweater",
+  "regulator",
+  "vest",
+  "gilet",
+  "parka",
 ];
 const FACEBOOK_TARGET_PATTERNS = [
   "captain's chair",
@@ -30,6 +53,10 @@ const ALLOWED_CONDITION_PATTERNS = [
   "very good",
   "good condition",
   "good",
+  "6", // Vinted: New with tags
+  "1", // Vinted: New without tags
+  "2", // Vinted: Very good condition
+  "3", // Vinted: Good condition
 ];
 
 const ALLOWED_CATEGORY_PATTERNS = [
@@ -40,6 +67,11 @@ const ALLOWED_CATEGORY_PATTERNS = [
   "jackets",
   "clothes",
   "tops",
+  "men",
+  "women",
+  "activewear",
+  "sports",
+  "outdoor",
 ];
 
 function includesAny(value: string | undefined, patterns: string[]) {
@@ -61,7 +93,9 @@ function screenVintedListing(
 ): MatchResult {
   const reasons: string[] = [];
 
-  const brandOk = (listing.brand ?? "").toLowerCase().includes("patagonia");
+  const brandOk =
+    (listing.brand ?? "").toLowerCase().includes("patagonia") ||
+    listing.title.toLowerCase().includes("patagonia");
   if (!brandOk) reasons.push("brand_not_patagonia");
 
   const targetBlob = `${listing.brand ?? ""} ${listing.title} ${listing.description ?? ""}`.toLowerCase();
@@ -78,11 +112,9 @@ function screenVintedListing(
   if (!conditionOk) reasons.push("condition_not_allowed");
 
   const hasRecentPublished = typeof listing.publishedAtMs === "number";
-  let ageMinutes = Number.POSITIVE_INFINITY;
+  let ageMinutes = 0;
   if (hasRecentPublished) {
     ageMinutes = Math.max(0, Math.floor((nowMs - listing.publishedAtMs!) / 60000));
-  } else {
-    reasons.push("missing_published_at");
   }
 
   const in24h = ageMinutes < 24 * 60;
@@ -134,11 +166,9 @@ function screenFacebookListing(
   if (!hasTargetTerm) reasons.push("missing_target_model");
 
   const hasRecentPublished = typeof listing.publishedAtMs === "number";
-  let ageMinutes = Number.POSITIVE_INFINITY;
+  let ageMinutes = 0;
   if (hasRecentPublished) {
     ageMinutes = Math.max(0, Math.floor((nowMs - listing.publishedAtMs!) / 60000));
-  } else {
-    reasons.push("missing_published_at");
   }
 
   const in24h = ageMinutes < 24 * 60;

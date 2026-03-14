@@ -5,25 +5,60 @@ import time
 from typing import Any, Dict, List
 
 import requests
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 from vinted_scraper import scrape_vinted_listings_with_stats
 
 DEFAULT_VINTED_QUERIES = [
     "patagonia r1",
+    "patagonia r2",
+    "patagonia r3",
     "patagonia torrentshell jacket",
     "patagonia h2no",
     "patagonia goretex",
     "patagonia ski jacket",
+    "patagonia fleece",
+    "patagonia synchilla",
+    "patagonia better sweater",
+    "patagonia snap-t",
+    "patagonia retro-x",
+    "patagonia micro puff",
+    "patagonia nano puff",
+    "patagonia shorts",
 ]
 
 DEFAULT_TARGET_TERMS = [
     "r1",
+    "r2",
+    "r3",
     "torrentshell",
     "h2no",
     "goretex",
     "gore-tex",
     "ski jacket",
+    "jacket",
+    "fleece",
+    "synchilla",
+    "snap-t",
+    "better sweater",
+    "nano puff",
+    "micro puff",
+    "puffer",
+    "sweater",
+    "jumper",
+    "capilene",
+    "baggies",
+    "retro-x",
+    "das parka",
+    "down sweater",
+    "regulator",
+    "vest",
+    "gilet",
+    "parka",
 ]
 
 
@@ -80,8 +115,6 @@ def post_json(url: str, secret: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def main() -> int:
-    load_dotenv()
-
     convex_site_url = normalize_url_env(require_env("CONVEX_SITE_URL"))
     ingest_secret = require_env("INGEST_SHARED_SECRET")
 
