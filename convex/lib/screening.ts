@@ -15,6 +15,11 @@ const VINTED_TARGET_MODEL_PATTERNS = [
   "h2no",
   "shorts",
   "belted",
+  "pile fleece",
+  "better sweater",
+  "black hole",
+  "refugio",
+  "duffel",
 ];
 const FACEBOOK_TARGET_PATTERNS = [
   "captain's chair",
