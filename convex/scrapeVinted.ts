@@ -1,4 +1,4 @@
-import { internalAction } from "./_generated/server";
+import { action, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
 
 const VINTED_BASE = "https://www.vinted.co.uk";
@@ -112,6 +112,13 @@ function toListingInput(item: VintedApiItem) {
     imageUrl: item.photo?.url ?? undefined,
   };
 }
+
+export const scrapeAndIngestAction = action({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.runAction(internal.scrapeVinted.scrapeAndIngest, {});
+  },
+});
 
 export const scrapeAndIngest = internalAction({
   args: {},
