@@ -137,9 +137,9 @@ def main() -> int:
         "on",
     }
 
-    max_pages = int(os.getenv("MAX_PAGES", "3"))
+    max_pages = int(os.getenv("MAX_PAGES", "10"))
     page_load_timeout_seconds = int(os.getenv("PAGE_LOAD_TIMEOUT_SECONDS", "20"))
-    max_runtime_seconds = int(os.getenv("MAX_RUNTIME_SECONDS", "240"))
+    max_runtime_seconds = int(os.getenv("MAX_RUNTIME_SECONDS", "480"))
     max_item_age_hours = int(os.getenv("MAX_ITEM_AGE_HOURS", "24"))
     disable_notify = os.getenv("DISABLE_NOTIFY", "0").strip().lower() in {"1", "true", "yes", "on"}
 
