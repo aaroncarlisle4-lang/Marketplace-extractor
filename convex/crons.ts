@@ -4,6 +4,13 @@ import { internal } from "./_generated/api";
 const crons = cronJobs();
 
 crons.interval(
+  "scrape vinted",
+  { minutes: 5 },
+  internal.scrapeVinted.scrapeAndIngest,
+  {},
+);
+
+crons.interval(
   "run pending notification pass",
   { minutes: 1 },
   internal.jobs.runNotificationPass,
