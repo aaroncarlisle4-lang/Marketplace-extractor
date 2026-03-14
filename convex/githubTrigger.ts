@@ -1,4 +1,12 @@
 import { action, internalAction } from "./_generated/server";
+import { internal } from "./_generated/api";
+
+export const testTrigger = action({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.runAction(internal.githubTrigger.triggerVintedCycle, {});
+  },
+});
 
 export const triggerVintedCycle = internalAction({
   args: {},
