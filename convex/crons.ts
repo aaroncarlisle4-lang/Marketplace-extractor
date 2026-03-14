@@ -5,7 +5,7 @@ const crons = cronJobs();
 
 crons.interval(
   "trigger github vinted cycle",
-  { minutes: 5 },
+  { minutes: 10 },
   internal.githubTrigger.triggerVintedCycle,
   {},
 );
