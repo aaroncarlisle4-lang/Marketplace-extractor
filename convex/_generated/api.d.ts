@@ -10,6 +10,7 @@
 
 import type * as admin from "../admin.js";
 import type * as crons from "../crons.js";
+import type * as githubTrigger from "../githubTrigger.js";
 import type * as http from "../http.js";
 import type * as ingest from "../ingest.js";
 import type * as jobs from "../jobs.js";
@@ -30,6 +31,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   admin: typeof admin;
   crons: typeof crons;
+  githubTrigger: typeof githubTrigger;
   http: typeof http;
   ingest: typeof ingest;
   jobs: typeof jobs;

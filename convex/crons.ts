@@ -4,9 +4,9 @@ import { internal } from "./_generated/api";
 const crons = cronJobs();
 
 crons.interval(
-  "scrape vinted",
+  "trigger github vinted cycle",
   { minutes: 5 },
-  internal.scrapeVinted.scrapeAndIngest,
+  internal.githubTrigger.triggerVintedCycle,
   {},
 );
 
