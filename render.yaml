@@ -1,0 +1,36 @@
+services:
+  - type: web
+    name: marketplace-scraper
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: frankfurt
+    healthCheckPath: /health
+    envVars:
+      # Required secrets — set manually in Render dashboard
+      - key: CONVEX_SITE_URL
+        sync: false
+      - key: INGEST_SHARED_SECRET
+        sync: false
+
+      # Vinted scraper config (matches GitHub Actions defaults)
+      - key: VINTED_QUERIES
+        value: "patagonia shorts,patagonia r1,patagonia torrentshell jacket,patagonia h2no,patagonia pile fleece,patagonia black hole,patagonia duffel"
+      - key: VINTED_TARGET_TERMS
+        value: "shorts,belted,r1,torrentshell,h2no,pile fleece,black hole,duffel"
+      - key: STRICT_TARGET_ONLY
+        value: "1"
+      - key: MAX_PAGES
+        value: "10"
+      - key: PAGE_LOAD_TIMEOUT_SECONDS
+        value: "12"
+      - key: MAX_RUNTIME_SECONDS
+        value: "300"
+      - key: MAX_ITEM_AGE_HOURS
+        value: "24"
+      - key: DISABLE_NOTIFY
+        value: "0"
+
+      # Scheduler interval
+      - key: VINTED_INTERVAL_MINUTES
+        value: "10"
