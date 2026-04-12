@@ -1,5 +1,6 @@
 import logging
 import os
+import subprocess
 import sys
 import threading
 from contextlib import asynccontextmanager
@@ -7,7 +8,6 @@ from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI
-from fastapi.responses import Response
 
 logger = logging.getLogger("scraper-service")
 logging.basicConfig(
@@ -16,7 +16,7 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 
-# Global lock: only one scraper cycle at a time (Chrome memory constraint)
+# Global lock: only one Chrome process at a time
 _scraper_lock = threading.Lock()
 
 _last_run = {
@@ -24,21 +24,43 @@ _last_run = {
     "vinted_error": None,
 }
 
+# Hard timeout: kill Chrome + scraper if it overruns
+_SUBPROCESS_TIMEOUT = int(os.getenv("SUBPROCESS_TIMEOUT_SECONDS", "150"))
+
 
 def run_vinted_cycle():
     if not _scraper_lock.acquire(blocking=False):
         logger.info("Skipping Vinted cycle — another scraper is already running")
         return
+    proc = None
     try:
-        logger.info("Starting Vinted cycle")
-        from run_cycle import main as vinted_main
-        vinted_main()
-        _last_run["vinted"] = datetime.now(timezone.utc).isoformat()
-        _last_run["vinted_error"] = None
-        logger.info("Vinted cycle completed")
+        logger.info("Starting Vinted cycle (subprocess, timeout=%ds)", _SUBPROCESS_TIMEOUT)
+        proc = subprocess.Popen(
+            [sys.executable, "/app/run_cycle.py"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=os.environ.copy(),
+        )
+        stdout, stderr = proc.communicate(timeout=_SUBPROCESS_TIMEOUT)
+        if proc.returncode == 0:
+            _last_run["vinted"] = datetime.now(timezone.utc).isoformat()
+            _last_run["vinted_error"] = None
+            logger.info("Vinted cycle completed")
+            if stdout:
+                logger.info("Output: %s", stdout.decode(errors="replace")[-1000:])
+        else:
+            error = stderr.decode(errors="replace")[-500:] if stderr else f"exit {proc.returncode}"
+            _last_run["vinted_error"] = error
+            logger.error("Vinted cycle failed (exit %d): %s", proc.returncode, error)
+    except subprocess.TimeoutExpired:
+        logger.warning("Vinted cycle timed out after %ds — killing Chrome", _SUBPROCESS_TIMEOUT)
+        if proc:
+            proc.kill()
+            proc.communicate()
+        _last_run["vinted_error"] = f"timeout after {_SUBPROCESS_TIMEOUT}s"
     except Exception as e:
         _last_run["vinted_error"] = str(e)
-        logger.exception("Vinted cycle failed: %s", e)
+        logger.exception("Vinted cycle error: %s", e)
     finally:
         _scraper_lock.release()
 
