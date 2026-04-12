@@ -158,6 +158,7 @@ class VintedScraper:
         options.add_argument("--no-first-run")
         options.add_argument("--window-size=1280,800")
         options.add_argument("--js-flags=--max-old-space-size=256")
+        options.add_argument("--blink-settings=imagesEnabled=false")
         self.driver = webdriver.Chrome(options=options)
         self.driver.set_page_load_timeout(page_load_timeout_seconds)
         self.driver.set_script_timeout(page_load_timeout_seconds)
