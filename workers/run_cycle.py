@@ -29,6 +29,7 @@ DEFAULT_VINTED_QUERIES = [
     "patagonia micro puff",
     "patagonia nano puff",
     "patagonia shorts",
+    "tala leggings",
 ]
 
 DEFAULT_TARGET_TERMS = [
@@ -59,6 +60,7 @@ DEFAULT_TARGET_TERMS = [
     "vest",
     "gilet",
     "parka",
+    "leggings",
 ]
 
 

@@ -8,7 +8,12 @@ function envNumber(name: string, fallback: number): number {
   return parsed;
 }
 
-const VINTED_MAX_PRICE_MINOR = envNumber("VINTED_MAX_PRICE_MINOR", 5000);
+// Per-brand price limits (pence). Add new brands here as needed.
+const BRAND_PRICE_LIMITS: Array<{ brand: string; maxPriceMinor: number }> = [
+  { brand: "patagonia", maxPriceMinor: envNumber("VINTED_MAX_PRICE_MINOR", 5000) },
+  { brand: "tala",      maxPriceMinor: envNumber("TALA_MAX_PRICE_MINOR",   1200) },
+];
+
 const VINTED_TARGET_MODEL_PATTERNS = [
   "r1",
   "torrentshell",
@@ -18,6 +23,7 @@ const VINTED_TARGET_MODEL_PATTERNS = [
   "pile fleece",
   "black hole",
   "duffel",
+  "leggings",
 ];
 const FACEBOOK_TARGET_PATTERNS = [
   "captain's chair",
@@ -51,6 +57,9 @@ const ALLOWED_CATEGORY_PATTERNS = [
   "activewear",
   "sports",
   "outdoor",
+  "leggings",
+  "bottoms",
+  "trousers",
 ];
 
 function includesAny(value: string | undefined, patterns: string[]) {
@@ -72,10 +81,10 @@ function screenVintedListing(
 ): MatchResult {
   const reasons: string[] = [];
 
-  const brandOk =
-    (listing.brand ?? "").toLowerCase().includes("patagonia") ||
-    listing.title.toLowerCase().includes("patagonia");
-  if (!brandOk) reasons.push("brand_not_patagonia");
+  const titleBrandBlob = `${listing.brand ?? ""} ${listing.title}`.toLowerCase();
+  const matchedBrand = BRAND_PRICE_LIMITS.find(({ brand }) => titleBrandBlob.includes(brand));
+  const brandOk = matchedBrand !== undefined;
+  if (!brandOk) reasons.push("brand_not_target");
 
   const targetBlob = `${listing.brand ?? ""} ${listing.title} ${listing.description ?? ""}`.toLowerCase();
   const modelOk = includesAny(targetBlob, VINTED_TARGET_MODEL_PATTERNS);
@@ -99,10 +108,11 @@ function screenVintedListing(
   const in24h = ageMinutes < 24 * 60;
   if (!in24h) reasons.push("outside_24h_window");
 
+  const maxPrice = matchedBrand?.maxPriceMinor ?? BRAND_PRICE_LIMITS[0].maxPriceMinor;
   const priceOk =
     (listing.currency ?? "").toUpperCase() === "GBP" &&
     typeof listing.priceMinor === "number" &&
-    listing.priceMinor <= VINTED_MAX_PRICE_MINOR;
+    listing.priceMinor <= maxPrice;
   if (!priceOk) reasons.push("price_or_currency_not_allowed");
 
   const freshnessBucket = computeFreshness(ageMinutes, 10);
@@ -113,7 +123,7 @@ function screenVintedListing(
   else if (freshnessBucket === "RECENT") score += 20;
 
   if (typeof listing.priceMinor === "number") {
-    const valueGain = Math.max(0, VINTED_MAX_PRICE_MINOR - listing.priceMinor);
+    const valueGain = Math.max(0, maxPrice - listing.priceMinor);
     score += Math.min(30, Math.floor(valueGain / 100));
   }
 
