@@ -3,10 +3,11 @@ import os
 import sys
 import threading
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI
+from fastapi.responses import Response
 
 logger = logging.getLogger("scraper-service")
 logging.basicConfig(
@@ -51,7 +52,7 @@ async def lifespan(app: FastAPI):
         "interval",
         minutes=interval,
         id="vinted",
-        next_run_time=datetime.now(timezone.utc),
+        next_run_time=datetime.now(timezone.utc) + timedelta(seconds=30),
     )
     scheduler.start()
     logger.info("Scheduler started: Vinted every %d minutes", interval)
@@ -62,7 +63,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 def health():
     return {
         "status": "ok",
