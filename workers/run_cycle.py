@@ -51,7 +51,6 @@ DEFAULT_TARGET_TERMS = [
     "sweater",
     "jumper",
     "capilene",
-    "baggies",
     "retro-x",
     "das parka",
     "down sweater",
@@ -63,6 +62,7 @@ DEFAULT_TARGET_TERMS = [
 ]
 
 MAX_PRICE_GBP = int(os.getenv("MAX_PRICE_GBP", "20"))
+VINTED_MAX_PRICE_MINOR = int(os.getenv("VINTED_MAX_PRICE_MINOR", "5000"))
 
 
 def require_env(name: str) -> str:
@@ -151,6 +151,10 @@ def main() -> int:
     scrape_results_by_query: List[Dict[str, Any]] = []
 
     for query in queries:
+        q_lower = query.lower()
+        # Use 50 for Patagonia, otherwise use the configured MAX_PRICE_GBP (default 20)
+        current_max_price = VINTED_MAX_PRICE_MINOR // 100 if "patagonia" in q_lower else MAX_PRICE_GBP
+
         scrape_result = scrape_vinted_listings_with_stats(
             query=query,
             max_pages=max_pages,
@@ -159,7 +163,7 @@ def main() -> int:
             max_item_age_hours=max_item_age_hours,
             strict_target_only=strict_target_only,
             target_terms=target_terms,
-            max_price_gbp=MAX_PRICE_GBP,
+            max_price_gbp=current_max_price,
         )
         listings_for_query: List[Dict[str, Any]] = drop_none_values(scrape_result["listings"])
         scrape_results_by_query.append(

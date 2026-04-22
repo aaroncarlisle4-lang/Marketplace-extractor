@@ -77,7 +77,6 @@ DEFAULT_TARGET_TERMS = [
     "sweater",
     "jumper",
     "capilene",
-    "baggies",
     "retro-x",
     "das parka",
     "down sweater",
