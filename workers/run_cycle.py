@@ -28,7 +28,6 @@ DEFAULT_VINTED_QUERIES = [
     "patagonia retro-x",
     "patagonia micro puff",
     "patagonia nano puff",
-    "patagonia shorts",
     "tala leggings",
 ]
 
@@ -62,6 +61,8 @@ DEFAULT_TARGET_TERMS = [
     "parka",
     "leggings",
 ]
+
+MAX_PRICE_GBP = int(os.getenv("MAX_PRICE_GBP", "20"))
 
 
 def require_env(name: str) -> str:
@@ -158,6 +159,7 @@ def main() -> int:
             max_item_age_hours=max_item_age_hours,
             strict_target_only=strict_target_only,
             target_terms=target_terms,
+            max_price_gbp=MAX_PRICE_GBP,
         )
         listings_for_query: List[Dict[str, Any]] = drop_none_values(scrape_result["listings"])
         scrape_results_by_query.append(
