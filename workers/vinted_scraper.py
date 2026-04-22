@@ -138,6 +138,7 @@ class ScrapeConfig:
     page_load_timeout_seconds: int = 20
     max_runtime_seconds: int = 240
     max_item_age_hours: int = 2
+    max_price_gbp: float = 20.0
 
 
 class VintedScraper:
@@ -171,6 +172,7 @@ class VintedScraper:
             "listing_skipped_not_target": 0,
             "listing_skipped_missing_published_at": 0,
             "listing_skipped_stale_24h": 0,
+            "listing_skipped_over_price": 0,
         }
 
     def close(self) -> None:
@@ -433,6 +435,13 @@ class VintedScraper:
             if age_minutes > max_age_minutes:
                 self.stats["listing_skipped_stale_24h"] += 1
                 return
+            # Check price threshold
+            price_minor = record.get("priceMinor")
+            if price_minor is not None:
+                price_gbp = price_minor / 100.0
+                if price_gbp > config.max_price_gbp:
+                    self.stats["listing_skipped_over_price"] = self.stats.get("listing_skipped_over_price", 0) + 1
+                    return
             listings.append(record)
 
         for page in range(1, config.max_pages + 1):
@@ -480,6 +489,7 @@ def scrape_vinted_listings_with_stats(
     max_item_age_hours: int = 24,
     strict_target_only: bool = True,
     target_terms: Optional[List[str]] = None,
+    max_price_gbp: float = 20.0,
 ) -> Dict:
     scraper = VintedScraper(page_load_timeout_seconds=page_load_timeout_seconds)
     try:
@@ -491,6 +501,7 @@ def scrape_vinted_listings_with_stats(
             page_load_timeout_seconds=page_load_timeout_seconds,
             max_runtime_seconds=max_runtime_seconds,
             max_item_age_hours=max_item_age_hours,
+            max_price_gbp=max_price_gbp,
         )
         listings = scraper.run(config)
         return {"listings": listings, "stats": scraper.stats}
