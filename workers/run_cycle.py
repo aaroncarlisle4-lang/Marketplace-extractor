@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import sys
 import time
@@ -11,7 +12,18 @@ try:
 except ImportError:
     pass
 
-from vinted_scraper import scrape_vinted_listings_with_stats
+from vinted_scraper import (
+    ScrapeConfig,
+    VintedScraper,
+    _get_resource_snapshot,
+)
+
+logger = logging.getLogger("run-cycle")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    stream=sys.stdout,
+)
 
 DEFAULT_VINTED_QUERIES = [
     "patagonia r1",
@@ -116,6 +128,100 @@ def post_json(url: str, secret: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     raise RuntimeError(f"POST failed for {url}: {last_error}")
 
 
+def _run_queries_with_shared_scraper(
+    queries: List[str],
+    target_terms: List[str],
+    strict_target_only: bool,
+    max_pages: int,
+    page_load_timeout_seconds: int,
+    per_query_runtime_seconds: int,
+    max_item_age_hours: int,
+) -> tuple[Dict[str, Dict[str, Any]], List[Dict[str, Any]]]:
+    """
+    Run all queries through a single shared VintedScraper (one Chrome instance).
+    Returns (deduped_listings, scrape_results_by_query).
+    """
+    from time import monotonic
+
+    deduped_listings: Dict[str, Dict[str, Any]] = {}
+    scrape_results_by_query: List[Dict[str, Any]] = []
+
+    before = _get_resource_snapshot()
+    logger.info(
+        "Opening shared Chrome instance for %d queries (fds=%d procs=%d)",
+        len(queries),
+        before["fd_count"],
+        before["proc_count"],
+    )
+
+    with VintedScraper(page_load_timeout_seconds=page_load_timeout_seconds) as scraper:
+        for query in queries:
+            query_start = monotonic()
+            logger.info("Scraping query: %r", query)
+            config = ScrapeConfig(
+                query=query,
+                max_pages=max_pages,
+                strict_target_only=strict_target_only,
+                target_terms=target_terms,
+                page_load_timeout_seconds=page_load_timeout_seconds,
+                max_runtime_seconds=per_query_runtime_seconds,
+                max_item_age_hours=max_item_age_hours,
+            )
+            try:
+                listings_for_query_raw = scraper.run(config)
+            except Exception as exc:
+                logger.error("Query %r failed: %s", query, exc, exc_info=True)
+                scrape_results_by_query.append(
+                    {"query": query, "scraped": 0, "stats": scraper.stats, "error": str(exc)}
+                )
+                continue
+
+            listings_for_query: List[Dict[str, Any]] = drop_none_values(listings_for_query_raw)
+            elapsed = monotonic() - query_start
+            logger.info(
+                "Query %r done: %d listings in %.1fs (stats=%s)",
+                query,
+                len(listings_for_query),
+                elapsed,
+                scraper.stats,
+            )
+            scrape_results_by_query.append(
+                {"query": query, "scraped": len(listings_for_query), "stats": dict(scraper.stats)}
+            )
+            for listing in listings_for_query:
+                key = f"{listing.get('source', 'unknown')}:{listing.get('listingId', '')}"
+                deduped_listings[key] = listing
+
+            # Reset per-query stats for the next query
+            scraper.stats = {k: 0 for k in scraper.stats}
+
+    after = _get_resource_snapshot()
+    fd_delta = after["fd_count"] - before["fd_count"]
+    proc_delta = after["proc_count"] - before["proc_count"]
+    if fd_delta > 10 or proc_delta > 3:
+        logger.warning(
+            "Resource leak after all queries: fds %d→%d (delta=%+d), procs %d→%d (delta=%+d)",
+            before["fd_count"],
+            after["fd_count"],
+            fd_delta,
+            before["proc_count"],
+            after["proc_count"],
+            proc_delta,
+        )
+    else:
+        logger.info(
+            "Shared Chrome closed cleanly: fds %d→%d (delta=%+d), procs %d→%d (delta=%+d)",
+            before["fd_count"],
+            after["fd_count"],
+            fd_delta,
+            before["proc_count"],
+            after["proc_count"],
+            proc_delta,
+        )
+
+    return deduped_listings, scrape_results_by_query
+
+
 def main() -> int:
     convex_site_url = normalize_url_env(require_env("CONVEX_SITE_URL"))
     ingest_secret = require_env("INGEST_SHARED_SECRET")
@@ -146,30 +252,16 @@ def main() -> int:
     disable_notify = os.getenv("DISABLE_NOTIFY", "0").strip().lower() in {"1", "true", "yes", "on"}
 
     per_query_runtime_seconds = max(30, int(max_runtime_seconds / max(1, len(queries))))
-    deduped_listings: Dict[str, Dict[str, Any]] = {}
-    scrape_results_by_query: List[Dict[str, Any]] = []
 
-    for query in queries:
-        scrape_result = scrape_vinted_listings_with_stats(
-            query=query,
-            max_pages=max_pages,
-            page_load_timeout_seconds=page_load_timeout_seconds,
-            max_runtime_seconds=per_query_runtime_seconds,
-            max_item_age_hours=max_item_age_hours,
-            strict_target_only=strict_target_only,
-            target_terms=target_terms,
-        )
-        listings_for_query: List[Dict[str, Any]] = drop_none_values(scrape_result["listings"])
-        scrape_results_by_query.append(
-            {
-                "query": query,
-                "scraped": len(listings_for_query),
-                "stats": scrape_result["stats"],
-            }
-        )
-        for listing in listings_for_query:
-            key = f"{listing.get('source', 'unknown')}:{listing.get('listingId', '')}"
-            deduped_listings[key] = listing
+    deduped_listings, scrape_results_by_query = _run_queries_with_shared_scraper(
+        queries=queries,
+        target_terms=target_terms,
+        strict_target_only=strict_target_only,
+        max_pages=max_pages,
+        page_load_timeout_seconds=page_load_timeout_seconds,
+        per_query_runtime_seconds=per_query_runtime_seconds,
+        max_item_age_hours=max_item_age_hours,
+    )
 
     listings = list(deduped_listings.values())
     if not listings:

@@ -1,11 +1,16 @@
 import json
+import logging
 import os
 import re
+import resource
+import signal
 import urllib.parse
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from time import monotonic
 from typing import Dict, List, Optional
+
+logger = logging.getLogger("vinted-scraper")
 
 try:
     from selenium import webdriver
@@ -159,6 +164,18 @@ class VintedScraper:
         options.add_argument("--window-size=1280,800")
         options.add_argument("--js-flags=--max-old-space-size=256")
         options.add_argument("--blink-settings=imagesEnabled=false")
+        # Reduce renderer process count and memory footprint
+        options.add_argument("--renderer-process-limit=1")
+        options.add_argument("--disable-background-timer-throttling")
+        options.add_argument("--disable-backgrounding-occluded-windows")
+        options.add_argument("--disable-hang-monitor")
+        options.add_argument("--disable-ipc-flooding-protection")
+        options.add_argument("--disable-client-side-phishing-detection")
+        options.add_argument("--disable-popup-blocking")
+        options.add_argument("--disable-prompt-on-repost")
+        options.add_argument("--metrics-recording-only")
+        options.add_argument("--no-default-browser-check")
+        options.add_argument("--safebrowsing-disable-auto-update")
         self.driver = webdriver.Chrome(options=options)
         self.driver.set_page_load_timeout(page_load_timeout_seconds)
         self.driver.set_script_timeout(page_load_timeout_seconds)
@@ -173,8 +190,43 @@ class VintedScraper:
             "listing_skipped_stale_24h": 0,
         }
 
+    def __enter__(self) -> "VintedScraper":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.close()
+
     def close(self) -> None:
-        self.driver.quit()
+        """Quit the WebDriver and ensure the underlying Chrome process is dead."""
+        service = getattr(self.driver, "service", None)
+        chrome_pid: Optional[int] = None
+        if service is not None:
+            chrome_pid = getattr(service, "process", None)
+            if chrome_pid is not None:
+                chrome_pid = getattr(chrome_pid, "pid", None)
+
+        try:
+            self.driver.quit()
+            logger.debug("driver.quit() completed cleanly")
+        except Exception as exc:
+            logger.warning("driver.quit() raised an exception (will force-kill): %s", exc)
+            # Fall through to the force-kill block below
+
+        # Belt-and-suspenders: if the Chrome process is still alive, kill it.
+        if chrome_pid is not None:
+            try:
+                os.kill(chrome_pid, 0)  # check if process exists
+                logger.warning(
+                    "Chrome process still alive after quit() — sending SIGTERM (pid=%d)", chrome_pid
+                )
+                try:
+                    os.kill(chrome_pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            except ProcessLookupError:
+                pass  # already gone — good
+            except Exception as exc:
+                logger.warning("Could not check/kill Chrome pid=%d: %s", chrome_pid, exc)
 
     @retry(wait=wait_exponential(multiplier=1, min=1, max=8), stop=stop_after_attempt(3))
     def _extract_listing_urls(self, search_url: str) -> List[str]:
@@ -463,13 +515,29 @@ class VintedScraper:
         return listings
 
 
-def scrape_vinted_listings(query: str, max_pages: int) -> List[Dict]:
-    scraper = VintedScraper()
+def _get_resource_snapshot() -> Dict:
+    """Capture open FD count and process count for leak detection."""
+    fd_count = -1
+    proc_count = -1
     try:
+        fd_count = len(os.listdir(f"/proc/{os.getpid()}/fd"))
+    except Exception:
+        try:
+            soft, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
+            fd_count = soft
+        except Exception:
+            pass
+    try:
+        proc_count = len(os.listdir("/proc"))
+    except Exception:
+        pass
+    return {"fd_count": fd_count, "proc_count": proc_count}
+
+
+def scrape_vinted_listings(query: str, max_pages: int) -> List[Dict]:
+    with VintedScraper() as scraper:
         config = ScrapeConfig(query=query, max_pages=max_pages)
         return scraper.run(config)
-    finally:
-        scraper.close()
 
 
 def scrape_vinted_listings_with_stats(
@@ -481,6 +549,13 @@ def scrape_vinted_listings_with_stats(
     strict_target_only: bool = True,
     target_terms: Optional[List[str]] = None,
 ) -> Dict:
+    before = _get_resource_snapshot()
+    logger.info(
+        "scrape_vinted_listings_with_stats starting: query=%r fds=%d procs=%d",
+        query,
+        before["fd_count"],
+        before["proc_count"],
+    )
     scraper = VintedScraper(page_load_timeout_seconds=page_load_timeout_seconds)
     try:
         config = ScrapeConfig(
@@ -496,6 +571,33 @@ def scrape_vinted_listings_with_stats(
         return {"listings": listings, "stats": scraper.stats}
     finally:
         scraper.close()
+        after = _get_resource_snapshot()
+        fd_delta = after["fd_count"] - before["fd_count"]
+        proc_delta = after["proc_count"] - before["proc_count"]
+        if fd_delta > 5 or proc_delta > 2:
+            logger.warning(
+                "Resource leak suspected after query=%r: "
+                "fds %d→%d (delta=%+d), procs %d→%d (delta=%+d)",
+                query,
+                before["fd_count"],
+                after["fd_count"],
+                fd_delta,
+                before["proc_count"],
+                after["proc_count"],
+                proc_delta,
+            )
+        else:
+            logger.info(
+                "scrape_vinted_listings_with_stats done: query=%r "
+                "fds %d→%d (delta=%+d), procs %d→%d (delta=%+d)",
+                query,
+                before["fd_count"],
+                after["fd_count"],
+                fd_delta,
+                before["proc_count"],
+                after["proc_count"],
+                proc_delta,
+            )
 
 
 if __name__ == "__main__":
