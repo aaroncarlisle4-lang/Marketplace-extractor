@@ -345,13 +345,13 @@ class VintedScraper:
             return None
         return record
 
-    def _is_target_match(self, item: Dict, target_terms: List[str]) -> bool:
+    def _is_target_match(self, item: Dict, target_terms: List[str], query: str = "") -> bool:
         brand = str(item.get("brand") or "").lower()
         title = str(item.get("title") or "").lower()
         description = str(item.get("description") or "").lower()
         text = f"{brand} {title} {description}"
 
-        if "patagonia" not in text:
+        if "patagonia" in query.lower() and "patagonia" not in text:
             return False
 
         normalized_text = re.sub(r"[^a-z0-9]+", " ", text).strip()
@@ -419,7 +419,7 @@ class VintedScraper:
             if listing_id in seen:
                 return
             seen.add(listing_id)
-            if config.strict_target_only and not self._is_target_match(record, config.target_terms):
+            if config.strict_target_only and not self._is_target_match(record, config.target_terms, config.query):
                 self.stats["listing_skipped_not_target"] += 1
                 return
             published_at = record.get("publishedAt")
