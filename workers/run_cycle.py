@@ -106,6 +106,14 @@ def post_json(url: str, secret: str, payload: Dict[str, Any]) -> Dict[str, Any]:
                 data=json.dumps(payload),
                 timeout=60,
             )
+            if not response.ok:
+                try:
+                    print(
+                        f"[attempt {attempt}] HTTP {response.status_code} from {url}: {response.text[:2000]}",
+                        file=sys.stderr,
+                    )
+                except Exception:
+                    pass
             response.raise_for_status()
             return response.json()
         except Exception as err:  # noqa: BLE001
