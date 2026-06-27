@@ -38,12 +38,15 @@ http.route({
     const listings = Array.isArray(body.listings) ? body.listings : [];
 
     const startedAtMs = Date.now();
-    const runId = await ctx.runMutation(internal.jobs.startRun, {
-      kind: "ingest",
-      startedAtMs,
-    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let runId: any = null;
 
     try {
+      runId = await ctx.runMutation(internal.jobs.startRun, {
+        kind: "ingest",
+        startedAtMs,
+      });
+
       const BATCH_SIZE = 50;
       const accumulated = { inserted: 0, updated: 0, matched: 0, rejected: 0 };
       for (let i = 0; i < listings.length; i += BATCH_SIZE) {
@@ -56,55 +59,44 @@ http.route({
         accumulated.matched += batchResult.matched;
         accumulated.rejected += batchResult.rejected ?? 0;
       }
-      const result = accumulated;
 
       await ctx.runMutation(internal.jobs.finishRun, {
         runId,
         endedAtMs: Date.now(),
         scraped: listings.length,
-        inserted: result.inserted,
-        updated: result.updated,
-        rejected: result.rejected ?? 0,
-        matched: result.matched,
+        inserted: accumulated.inserted,
+        updated: accumulated.updated,
+        rejected: accumulated.rejected,
+        matched: accumulated.matched,
         sent: 0,
         failed: 0,
         skipped: 0,
       });
 
-      let notify: unknown = null;
-      try {
-        notify = await ctx.runAction(internal.jobs.runNotificationPass, {
-          limit: 100,
-        });
-      } catch (notifyErr) {
-        notify = {
-          error:
-            notifyErr instanceof Error ? notifyErr.message : "notify_after_ingest_failed",
-        };
-      }
-
-      return new Response(JSON.stringify({ ...result, notify }), {
+      return new Response(JSON.stringify(accumulated), {
         status: 200,
         headers: { "content-type": "application/json" },
       });
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : "ingest_error";
-      try {
-        await ctx.runMutation(internal.jobs.finishRun, {
-          runId,
-          endedAtMs: Date.now(),
-          scraped: listings.length,
-          inserted: 0,
-          updated: 0,
-          rejected: 0,
-          matched: 0,
-          sent: 0,
-          failed: 0,
-          skipped: 0,
-          error: errorMsg,
-        });
-      } catch {
-        // best-effort; don't mask the original error
+      if (runId !== null) {
+        try {
+          await ctx.runMutation(internal.jobs.finishRun, {
+            runId,
+            endedAtMs: Date.now(),
+            scraped: listings.length,
+            inserted: 0,
+            updated: 0,
+            rejected: 0,
+            matched: 0,
+            sent: 0,
+            failed: 0,
+            skipped: 0,
+            error: errorMsg,
+          });
+        } catch {
+          // best-effort; don't mask the original error
+        }
       }
       return new Response(JSON.stringify({ error: errorMsg }), {
         status: 500,
