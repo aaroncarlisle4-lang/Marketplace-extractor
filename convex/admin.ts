@@ -1,4 +1,4 @@
-import { mutation } from "./_generated/server";
+import { mutation, internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import { screenListing } from "./lib/screening";
 
@@ -46,6 +46,37 @@ export const deleteListingBySourceAndId = mutation({
       deletedMatch: !!match,
       deletedNotifications: notifications.length,
     };
+  },
+});
+
+// Deletes listingSnapshots + their matches older than `olderThanHours` (default 48).
+// Processes up to 200 per call so it stays well within Convex's transaction limits.
+// Intended to be called from a cron job hourly.
+export const pruneOldListings = internalMutation({
+  args: { olderThanHours: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const hours = args.olderThanHours ?? 120;
+    const cutoffMs = Date.now() - hours * 60 * 60 * 1000;
+
+    const old = await ctx.db
+      .query("listingSnapshots")
+      .withIndex("by_publishedAtMs", (q) => q.lt("publishedAtMs", cutoffMs))
+      .take(200);
+
+    let deleted = 0;
+    for (const listing of old) {
+      const match = await ctx.db
+        .query("matches")
+        .withIndex("by_source_listingId", (q) =>
+          q.eq("source", listing.source).eq("listingId", listing.listingId),
+        )
+        .unique();
+      if (match) await ctx.db.delete(match._id);
+      await ctx.db.delete(listing._id);
+      deleted += 1;
+    }
+
+    return { deleted };
   },
 });
 

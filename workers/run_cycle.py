@@ -28,7 +28,6 @@ DEFAULT_VINTED_QUERIES = [
     "patagonia retro-x",
     "patagonia micro puff",
     "patagonia nano puff",
-    "tala leggings",
 ]
 
 DEFAULT_TARGET_TERMS = [
@@ -58,7 +57,6 @@ DEFAULT_TARGET_TERMS = [
     "vest",
     "gilet",
     "parka",
-    "leggings",
 ]
 
 MAX_PRICE_GBP = int(os.getenv("MAX_PRICE_GBP", "20"))

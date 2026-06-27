@@ -43,13 +43,12 @@ jobs:
             patagonia torrentshell jacket,patagonia h2no,patagonia goretex,
             patagonia ski jacket,patagonia fleece,patagonia synchilla,
             patagonia better sweater,patagonia snap-t,patagonia retro-x,
-            patagonia micro puff,patagonia nano puff,
-            tala leggings
+            patagonia micro puff,patagonia nano puff
           VINTED_TARGET_TERMS: >-
             r1,r2,r3,torrentshell,h2no,goretex,gore-tex,ski jacket,jacket,
             fleece,synchilla,snap-t,better sweater,nano puff,micro puff,
             puffer,sweater,jumper,capilene,retro-x,das parka,down sweater,
-            regulator,vest,gilet,parka,leggings,tights,tala
+            regulator,vest,gilet,parka
           STRICT_TARGET_ONLY: ${{ secrets.STRICT_TARGET_ONLY || '1' }}
           MAX_PAGES: ${{ secrets.MAX_PAGES || '10' }}
           PAGE_LOAD_TIMEOUT_SECONDS: ${{ secrets.PAGE_LOAD_TIMEOUT_SECONDS || '12' }}

@@ -17,4 +17,11 @@ crons.interval(
   { limit: 100 },
 );
 
+crons.interval(
+  "prune old listings",
+  { hours: 1 },
+  internal.admin.pruneOldListings,
+  {},
+);
+
 export default crons;

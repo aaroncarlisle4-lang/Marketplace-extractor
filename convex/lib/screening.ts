@@ -11,7 +11,6 @@ function envNumber(name: string, fallback: number): number {
 // Per-brand price limits (pence). Add new brands here as needed.
 const BRAND_PRICE_LIMITS: Array<{ brand: string; maxPriceMinor: number }> = [
   { brand: "patagonia", maxPriceMinor: envNumber("VINTED_MAX_PRICE_MINOR", 5000) },
-  { brand: "tala",      maxPriceMinor: envNumber("TALA_MAX_PRICE_MINOR",   2000) },
 ];
 
 const VINTED_TARGET_MODEL_PATTERNS = [
@@ -21,7 +20,6 @@ const VINTED_TARGET_MODEL_PATTERNS = [
   "pile fleece",
   "black hole",
   "duffel",
-  "leggings",
 ];
 const FACEBOOK_TARGET_PATTERNS = [
   "captain's chair",
