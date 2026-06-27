@@ -44,9 +44,19 @@ http.route({
     });
 
     try {
-      const result = await ctx.runMutation(internal.ingest.upsertListingsInternal, {
-        listings: listings as any,
-      });
+      const BATCH_SIZE = 50;
+      const accumulated = { inserted: 0, updated: 0, matched: 0, rejected: 0 };
+      for (let i = 0; i < listings.length; i += BATCH_SIZE) {
+        const batch = listings.slice(i, i + BATCH_SIZE);
+        const batchResult = await ctx.runMutation(internal.ingest.upsertListingsInternal, {
+          listings: batch as any,
+        });
+        accumulated.inserted += batchResult.inserted;
+        accumulated.updated += batchResult.updated;
+        accumulated.matched += batchResult.matched;
+        accumulated.rejected += batchResult.rejected ?? 0;
+      }
+      const result = accumulated;
 
       await ctx.runMutation(internal.jobs.finishRun, {
         runId,

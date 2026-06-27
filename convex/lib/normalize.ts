@@ -51,7 +51,7 @@ export function normalizeListingInput(input: ListingInput): ListingInput & {
     location: cleanString(input.location),
     views: cleanNumber(input.views),
     interested: cleanNumber(input.interested),
-    description: cleanString(input.description),
+    description: cleanString(input.description)?.slice(0, 500),
     imageUrl: cleanString(input.imageUrl),
   };
 }
