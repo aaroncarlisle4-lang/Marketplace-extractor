@@ -78,20 +78,28 @@ http.route({
         headers: { "content-type": "application/json" },
       });
     } catch (err) {
-      await ctx.runMutation(internal.jobs.finishRun, {
-        runId,
-        endedAtMs: Date.now(),
-        scraped: listings.length,
-        inserted: 0,
-        updated: 0,
-        rejected: 0,
-        matched: 0,
-        sent: 0,
-        failed: 0,
-        skipped: 0,
-        error: err instanceof Error ? err.message : "ingest_error",
+      const errorMsg = err instanceof Error ? err.message : "ingest_error";
+      try {
+        await ctx.runMutation(internal.jobs.finishRun, {
+          runId,
+          endedAtMs: Date.now(),
+          scraped: listings.length,
+          inserted: 0,
+          updated: 0,
+          rejected: 0,
+          matched: 0,
+          sent: 0,
+          failed: 0,
+          skipped: 0,
+          error: errorMsg,
+        });
+      } catch {
+        // best-effort; don't mask the original error
+      }
+      return new Response(JSON.stringify({ error: errorMsg }), {
+        status: 500,
+        headers: { "content-type": "application/json" },
       });
-      throw err;
     }
   }),
 });

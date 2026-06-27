@@ -380,6 +380,7 @@ class VintedScraper:
         if isinstance(published_ts, (int, float)):
             published_at = datetime.fromtimestamp(published_ts, timezone.utc).isoformat()
 
+        status = item.get("status")
         return {
             "source": "vinted_uk",
             "listingId": str(listing_id),
@@ -389,7 +390,7 @@ class VintedScraper:
             "priceMinor": int(round(float(amount) * 100)) if amount is not None else None,
             "currency": currency,
             "size": item.get("size_title"),
-            "condition": item.get("status"),
+            "condition": str(status) if status is not None else None,
             "category": "clothes",
             "publishedAt": published_at,
             "fetchedAt": _utc_now_iso(),
