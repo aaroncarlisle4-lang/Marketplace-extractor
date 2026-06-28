@@ -213,12 +213,35 @@ def main() -> int:
     ingest_url = f"{convex_site_url}/ingest/listings"
     notify_url = f"{convex_site_url}/jobs/run-notifications"
 
-    ingest_result = post_json(ingest_url, ingest_secret, {"listings": listings})
-    notify_result = None
-    if not disable_notify:
-        notify_result = post_json(notify_url, ingest_secret, {"limit": 100})
+    # Send in smaller chunks rather than one big request: a single oversized
+    # POST is more likely to make the Convex http action run long enough to be
+    # killed mid-flight, which still leaves earlier batches committed server-side
+    # but reports the whole call as failed.
+    ingest_chunk_size = int(os.getenv("INGEST_CHUNK_SIZE", "100"))
+    ingest_accum = {"inserted": 0, "updated": 0, "matched": 0, "rejected": 0}
+    ingest_errors: List[str] = []
+    for i in range(0, len(listings), ingest_chunk_size):
+        chunk = listings[i : i + ingest_chunk_size]
+        try:
+            chunk_result = post_json(ingest_url, ingest_secret, {"listings": chunk})
+            for key in ingest_accum:
+                ingest_accum[key] += chunk_result.get(key, 0)
+        except Exception as err:  # noqa: BLE001
+            ingest_errors.append(str(err))
+            print(f"ingest chunk of {len(chunk)} listings failed: {err}", file=sys.stderr)
+    ingest_result: Dict[str, Any] = {**ingest_accum, "errors": ingest_errors}
+
+    # Always attempt notifications, even if ingest partially or fully failed:
+    # batches that did commit server-side before a failure can still contain
+    # real matches that deserve a Telegram alert.
+    if disable_notify:
+        notify_result: Dict[str, Any] = {"disabled": True, "reason": "DISABLE_NOTIFY is enabled"}
     else:
-        notify_result = {"disabled": True, "reason": "DISABLE_NOTIFY is enabled"}
+        try:
+            notify_result = post_json(notify_url, ingest_secret, {"limit": 100})
+        except Exception as err:  # noqa: BLE001
+            notify_result = {"error": str(err)}
+            print(f"notify call failed: {err}", file=sys.stderr)
 
     print(json.dumps({
         "scraped": len(listings),
@@ -230,6 +253,15 @@ def main() -> int:
         "ingest": ingest_result,
         "notify": notify_result,
     }, indent=2))
+
+    if ingest_errors:
+        raise RuntimeError(
+            f"{len(ingest_errors)} of "
+            f"{(len(listings) + ingest_chunk_size - 1) // ingest_chunk_size} ingest chunk(s) failed: "
+            f"{'; '.join(ingest_errors[:3])}"
+        )
+    if isinstance(notify_result, dict) and notify_result.get("error"):
+        raise RuntimeError(f"notify call failed: {notify_result['error']}")
     return 0
 
 
