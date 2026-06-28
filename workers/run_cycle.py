@@ -93,9 +93,15 @@ def parse_list_env(value: str | None) -> List[str]:
     return [part for part in parts if part]
 
 
+MAX_POST_ATTEMPTS = 4
+POST_BACKOFF_SECONDS = [3, 8, 20]  # one entry per retry (len == MAX_POST_ATTEMPTS - 1)
+# Kept short on purpose: the calling workflows have a 10-minute job timeout and
+# scraping alone can take up to MAX_RUNTIME_SECONDS, so retries must not eat that budget.
+
+
 def post_json(url: str, secret: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     last_error: Exception | None = None
-    for attempt in range(1, 4):
+    for attempt in range(1, MAX_POST_ATTEMPTS + 1):
         try:
             response = requests.post(
                 url,
@@ -114,12 +120,20 @@ def post_json(url: str, secret: str, payload: Dict[str, Any]) -> Dict[str, Any]:
                     )
                 except Exception:
                     pass
+                # Client errors (4xx) won't be fixed by retrying — fail fast.
+                if 400 <= response.status_code < 500:
+                    response.raise_for_status()
             response.raise_for_status()
             return response.json()
+        except requests.exceptions.HTTPError as err:
+            last_error = err
+            status = err.response.status_code if err.response is not None else None
+            if status is not None and 400 <= status < 500:
+                break
         except Exception as err:  # noqa: BLE001
             last_error = err
-            if attempt < 3:
-                time.sleep(attempt * 2)
+        if attempt < MAX_POST_ATTEMPTS:
+            time.sleep(POST_BACKOFF_SECONDS[attempt - 1])
     raise RuntimeError(f"POST failed for {url}: {last_error}")
 
 
