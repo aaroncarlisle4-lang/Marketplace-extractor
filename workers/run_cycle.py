@@ -138,8 +138,16 @@ def post_json(url: str, secret: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def main() -> int:
-    convex_site_url = normalize_url_env(require_env("CONVEX_SITE_URL"))
-    ingest_secret = require_env("INGEST_SHARED_SECRET")
+    try:
+        convex_site_url = normalize_url_env(require_env("CONVEX_SITE_URL"))
+        ingest_secret = require_env("INGEST_SHARED_SECRET")
+    except Exception as exc:  # noqa: BLE001
+        print(json.dumps({
+            "status": "skipped",
+            "reason": "missing_configuration",
+            "error": str(exc),
+        }, indent=2))
+        return 0
 
     queries = parse_list_env(os.getenv("VINTED_QUERIES"))
     if not queries:
@@ -269,5 +277,8 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:  # noqa: BLE001
-        print(f"run_cycle failed: {exc}", file=sys.stderr)
+        print(json.dumps({
+            "status": "failed",
+            "error": str(exc),
+        }, indent=2), file=sys.stderr)
         raise

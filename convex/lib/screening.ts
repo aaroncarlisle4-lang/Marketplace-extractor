@@ -13,14 +13,57 @@ const BRAND_PRICE_LIMITS: Array<{ brand: string; maxPriceMinor: number }> = [
   { brand: "patagonia", maxPriceMinor: envNumber("VINTED_MAX_PRICE_MINOR", 5000) },
 ];
 
-const VINTED_TARGET_MODEL_PATTERNS = [
+// Keep this in sync with the worker's VINTED_TARGET_TERMS. If a model is added
+// to the scraper queries but not here, its listings are ingested and then
+// silently dropped as `missing_target_model`, so they never notify.
+const DEFAULT_VINTED_TARGET_MODEL_PATTERNS = [
   "r1",
+  "r2",
+  "r3",
   "torrentshell",
   "h2no",
+  "goretex",
+  "gore-tex",
+  "ski jacket",
+  "jacket",
+  "fleece",
+  "synchilla",
+  "snap-t",
+  "snap t",
+  "better sweater",
+  "nano puff",
+  "micro puff",
+  "puffer",
+  "sweater",
+  "jumper",
+  "capilene",
+  "retro-x",
+  "retro x",
+  "das parka",
+  "down sweater",
+  "vest",
+  "gilet",
+  "parka",
   "pile fleece",
   "black hole",
   "duffel",
 ];
+
+function envPatterns(name: string, fallback: string[]): string[] {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parts = raw
+    .split(",")
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  return parts.length > 0 ? parts : fallback;
+}
+
+// Allow the deployment to override via the same secret the worker uses.
+const VINTED_TARGET_MODEL_PATTERNS = envPatterns(
+  "VINTED_TARGET_TERMS",
+  DEFAULT_VINTED_TARGET_MODEL_PATTERNS,
+);
 const FACEBOOK_TARGET_PATTERNS = [
   "captain's chair",
   "captains chair",
@@ -53,9 +96,6 @@ const ALLOWED_CATEGORY_PATTERNS = [
   "activewear",
   "sports",
   "outdoor",
-  "leggings",
-  "bottoms",
-  "trousers",
 ];
 
 function includesAny(value: string | undefined, patterns: string[]) {
