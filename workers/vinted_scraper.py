@@ -4,7 +4,7 @@ import re
 import urllib.parse
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from time import monotonic
+from time import monotonic, sleep
 from typing import Dict, List, Optional
 
 try:
@@ -89,6 +89,88 @@ DEFAULT_TARGET_TERMS = [
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+EMBEDDED_ITEMS_MARKER = '\\"items\\":{\\"items\\":['
+EMBEDDED_ITEMS_END = '],\\"pagination\\":'
+
+_AGE_UNITS_MINUTES = {
+    "sec": 0, "second": 0, "min": 1, "minute": 1, "hour": 60, "hr": 60,
+    "day": 1440, "week": 10080, "month": 43200, "year": 525600,
+}
+
+# The catalog payload has no timestamps, so ages come from item pages, and
+# Vinted rate-limits (HTTP 429) quickly. Alerts only fire for items < 60 min
+# old, so only items newer than this cutoff are kept and age-checked.
+AGE_CHECK_CUTOFF_MINUTES = int(os.getenv("VINTED_AGE_CHECK_MINUTES", "90"))
+ITEM_PAGE_DELAY_SECONDS = float(os.getenv("VINTED_ITEM_PAGE_DELAY_SECONDS", "1.5"))
+
+# Vinted item ids increase with creation time. Once an item with id N is known
+# to be older than the cutoff, every item with id <= N is too, so its page
+# never needs to be opened. Shared across the per-query scraper instances.
+_stale_id_floor = 0
+# Set after repeated failed item-page reads (rate limiting): stop for this run.
+_item_pages_blocked = False
+
+
+def decode_embedded_items(html: str) -> Optional[List[Dict]]:
+    """Pull the catalog items array out of the escaped Next.js payload."""
+    start = html.find(EMBEDDED_ITEMS_MARKER)
+    if start == -1:
+        return None
+    start += len(EMBEDDED_ITEMS_MARKER)
+    end = html.find(EMBEDDED_ITEMS_END, start)
+    if end == -1:
+        return None
+    escaped = "[" + html[start:end] + "]"
+    try:
+        # The array sits inside a JS string literal: unescape it as one so
+        # non-ASCII text (e.g. "·", "£") survives intact.
+        items = json.loads(json.loads('"' + escaped + '"'))
+    except Exception:
+        try:
+            items = json.loads(escaped.encode("utf-8").decode("unicode_escape"))
+        except Exception:
+            return None
+    return items if isinstance(items, list) else None
+
+
+def parse_relative_age_minutes(text: str) -> Optional[int]:
+    """'4 min ago' -> 4, 'an hour ago' -> 60, 'yesterday' -> 1440."""
+    value = (text or "").strip().lower()
+    if not value:
+        return None
+    if value in {"just now", "now", "a moment ago", "moments ago"}:
+        return 0
+    if value == "yesterday":
+        return 1440
+    match = re.search(
+        r"(\d+|an?|one)\s*(sec|second|min|minute|hour|hr|day|week|month|year)s?\b.*ago", value
+    )
+    if not match:
+        return None
+    count = 1 if match.group(1) in {"a", "an", "one"} else int(match.group(1))
+    return count * _AGE_UNITS_MINUTES[match.group(2)]
+
+
+def extract_upload_age_minutes(html: str) -> Optional[int]:
+    patterns = [
+        r'upload_date\\",\\"data\\":\{\\"title\\":\\"[^"\\]*\\",\\"value\\":\\"([^"\\]+)\\"',
+        r'itemProp="upload_date"><span[^>]*>([^<]+)<',
+        r'"code":"upload_date","data":\{"title":"[^"]*","value":"([^"]+)"',
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, html)
+        if match:
+            minutes = parse_relative_age_minutes(match.group(1))
+            if minutes is not None:
+                return minutes
+    return None
+
+
+def _label_value(label: str, key: str) -> Optional[str]:
+    match = re.search(rf"\b{key}:\s*([^,]+)", label or "")
+    return match.group(1).strip() if match else None
 
 
 def _to_minor_gbp(price_text: str) -> Optional[int]:
@@ -212,24 +294,11 @@ class VintedScraper:
         return self._extract_listing_urls_from_embedded_items(self.driver.page_source)
 
     def _extract_listing_urls_from_embedded_items(self, html: str) -> List[str]:
-        marker = '\\"items\\":{\\"items\\":['
-        start = html.find(marker)
-        if start == -1:
-            return []
-        start += len(marker)
-        end = html.find('],\\"pagination\\":', start)
-        if end == -1:
-            return []
-        escaped = "[" + html[start:end] + "]"
-        try:
-            payload = escaped.encode("utf-8").decode("unicode_escape")
-            items = json.loads(payload)
-        except Exception:
-            return []
+        items = decode_embedded_items(html) or []
         out: List[str] = []
         seen = set()
         for item in items:
-            path = item.get("path")
+            path = item.get("path") or (item.get("productItem") or {}).get("url")
             if not isinstance(path, str) or not path.startswith("/items/"):
                 continue
             href = f"https://www.vinted.co.uk{path}"
@@ -251,24 +320,27 @@ class VintedScraper:
         return self._extract_embedded_items_from_html(self.driver.page_source)
 
     def _extract_embedded_items_from_html(self, html: str) -> List[Dict]:
-        marker = '\\"items\\":{\\"items\\":['
-        start = html.find(marker)
-        if start == -1:
-            return []
-        start += len(marker)
-        end = html.find('],\\"pagination\\":', start)
-        if end == -1:
-            return []
-        escaped = "[" + html[start:end] + "]"
-        try:
-            payload = escaped.encode("utf-8").decode("unicode_escape")
-            items = json.loads(payload)
-        except Exception:
-            return []
-        if not isinstance(items, list):
+        items = decode_embedded_items(html)
+        if not items:
             return []
         self.stats["page_link_count"] += len(items)
         return items
+
+    def _fetch_upload_age_minutes(self, url: str) -> Optional[int]:
+        self.stats["listing_pages_scraped"] += 1
+        try:
+            self.driver.get(url)
+        except TimeoutException:
+            try:
+                self.driver.execute_script("window.stop();")
+            except Exception:
+                return None
+        except Exception:
+            return None
+        try:
+            return extract_upload_age_minutes(self.driver.page_source)
+        except Exception:
+            return None
 
     def _extract_listing_id(self, url: str) -> str:
         match = re.search(r"/items/(\d+)", url)
@@ -362,6 +434,8 @@ class VintedScraper:
         return False
 
     def _record_from_embedded_item(self, item: Dict) -> Optional[Dict]:
+        if isinstance(item.get("productItem"), dict):
+            return self._record_from_product_item(item)
         listing_id = item.get("id")
         path = item.get("path")
         if listing_id is None or not isinstance(path, str):
@@ -401,6 +475,50 @@ class VintedScraper:
             "imageUrl": (item.get("photo") or {}).get("url"),
         }
 
+    def _record_from_product_item(self, item: Dict) -> Optional[Dict]:
+        """Current (2026) catalog format: {id, productItem: {...}, catalogTracking}.
+
+        It carries no timestamp, so publishedAt stays None until the item page
+        is checked (see run()).
+        """
+        product = item["productItem"]
+        listing_id = item.get("id") or product.get("id")
+        url = product.get("url")
+        if listing_id is None or not isinstance(url, str):
+            return None
+
+        price = product.get("price") or {}
+        amount = price.get("amount")
+        try:
+            price_minor = int(round(float(amount) * 100)) if amount is not None else None
+        except (TypeError, ValueError):
+            price_minor = None
+
+        item_box = product.get("itemBox") or {}
+        label = item_box.get("accessibilityLabel") or ""
+        photos = product.get("photos") or []
+        image_url = (photos[0] or {}).get("url") if photos else product.get("thumbnailUrl")
+
+        return {
+            "source": "vinted_uk",
+            "listingId": str(listing_id),
+            "url": f"https://www.vinted.co.uk{url}" if url.startswith("/") else url,
+            "title": product.get("title") or "(untitled)",
+            "brand": _label_value(label, "Brand") or item_box.get("firstLine"),
+            "priceMinor": price_minor,
+            "currency": price.get("currencyCode") or "GBP",
+            "size": _label_value(label, "Size"),
+            "condition": _label_value(label, "Condition"),
+            "category": "clothes",
+            "publishedAt": None,
+            "fetchedAt": _utc_now_iso(),
+            "location": None,
+            "views": None,
+            "interested": product.get("favouriteCount"),
+            "description": None,
+            "imageUrl": image_url,
+        }
+
     def run(self, config: ScrapeConfig) -> List[Dict]:
         criteria = define_criteria_query(
             order=[config.order],
@@ -412,37 +530,83 @@ class VintedScraper:
         now_ts = datetime.now(timezone.utc).timestamp()
         max_age_minutes = config.max_item_age_hours * 60
 
-        def maybe_add_record(record: Optional[Dict]) -> None:
+        def passes_cheap_filters(record: Optional[Dict]) -> bool:
             if not record:
                 self.stats["listing_errors"] += 1
-                return
+                return False
             listing_id = record["listingId"]
             if listing_id in seen:
-                return
+                return False
             seen.add(listing_id)
             if config.strict_target_only and not self._is_target_match(record, config.target_terms, config.query):
                 self.stats["listing_skipped_not_target"] += 1
-                return
-            published_at = record.get("publishedAt")
-            age_minutes = 0
-            if published_at:
-                try:
-                    published_ts = datetime.fromisoformat(published_at).timestamp()
-                    age_minutes = max(0, int((now_ts - published_ts) / 60))
-                except Exception:
-                    pass
-            
-            if age_minutes > max_age_minutes:
-                self.stats["listing_skipped_stale_24h"] += 1
-                return
+                return False
             # Check price threshold
             price_minor = record.get("priceMinor")
             if price_minor is not None:
                 price_gbp = price_minor / 100.0
                 if price_gbp > config.max_price_gbp:
                     self.stats["listing_skipped_over_price"] = self.stats.get("listing_skipped_over_price", 0) + 1
-                    return
+                    return False
+            return True
+
+        def add_if_fresh(record: Dict) -> None:
+            published_at = record.get("publishedAt")
+            if not published_at:
+                # Unknown age would screen as brand new and trigger an alert
+                # for an old listing, so drop it instead.
+                self.stats["listing_skipped_missing_published_at"] += 1
+                return
+            try:
+                published_ts = datetime.fromisoformat(published_at).timestamp()
+                age_minutes = max(0, int((now_ts - published_ts) / 60))
+            except Exception:
+                self.stats["listing_skipped_missing_published_at"] += 1
+                return
+            if age_minutes > max_age_minutes:
+                self.stats["listing_skipped_stale_24h"] += 1
+                return
             listings.append(record)
+
+        def resolve_ages(records: List[Dict]) -> None:
+            """Open item pages (newest id first) to fill in publishedAt.
+
+            Stops at the first item older than the cutoff: ids are assigned in
+            creation order, so everything after it in this order is older too.
+            """
+            global _stale_id_floor, _item_pages_blocked
+            cutoff = min(max_age_minutes, AGE_CHECK_CUTOFF_MINUTES)
+            consecutive_failures = 0
+            for record in sorted(records, key=lambda r: int(r["listingId"]), reverse=True):
+                listing_num = int(record["listingId"])
+                if listing_num <= _stale_id_floor:
+                    self.stats["listing_skipped_stale_24h"] += 1
+                    continue
+                if _item_pages_blocked:
+                    self.stats["listing_skipped_missing_published_at"] += 1
+                    continue
+                if monotonic() - started > config.max_runtime_seconds:
+                    self.stats["stopped_reason"] = "max_runtime_reached"
+                    return
+                if self.stats["listing_pages_scraped"]:
+                    sleep(ITEM_PAGE_DELAY_SECONDS)
+                age = self._fetch_upload_age_minutes(record["url"])
+                if age is None:
+                    self.stats["listing_skipped_missing_published_at"] += 1
+                    consecutive_failures += 1
+                    if consecutive_failures >= 2:
+                        _item_pages_blocked = True
+                        self.stats["item_pages_blocked"] = True
+                    continue
+                consecutive_failures = 0
+                if age > cutoff:
+                    _stale_id_floor = max(_stale_id_floor, listing_num)
+                    self.stats["listing_skipped_stale_24h"] += 1
+                    continue
+                record["publishedAt"] = datetime.fromtimestamp(
+                    now_ts - age * 60, timezone.utc
+                ).isoformat()
+                listings.append(record)
 
         for page in range(1, config.max_pages + 1):
             if monotonic() - started > config.max_runtime_seconds:
@@ -452,12 +616,24 @@ class VintedScraper:
             search_url = build_search_url(config.query, criteria, page)
             items = self._extract_embedded_items(search_url)
             if items:
+                needs_age: List[Dict] = []
                 for raw_item in items:
-                    if monotonic() - started > config.max_runtime_seconds:
-                        self.stats["stopped_reason"] = "max_runtime_reached"
-                        return listings
                     record = self._record_from_embedded_item(raw_item)
-                    maybe_add_record(record)
+                    if not passes_cheap_filters(record):
+                        continue
+                    if record.get("publishedAt"):
+                        add_if_fresh(record)
+                    else:
+                        needs_age.append(record)
+                resolve_ages(needs_age)
+                if self.stats.get("stopped_reason"):
+                    return listings
+                # Newest-first results: once a whole page is older than the
+                # window, later pages will be too.
+                page_ids = [int(i["id"]) for i in items if str(i.get("id", "")).isdigit()]
+                if page_ids and max(page_ids) <= _stale_id_floor:
+                    self.stats["stopped_reason"] = "reached_stale_items"
+                    break
                 continue
 
             listing_urls = self._extract_listing_urls(search_url)
@@ -467,7 +643,8 @@ class VintedScraper:
                     return listings
                 self.stats["listing_pages_scraped"] += 1
                 record = self.scrape_listing(listing_url)
-                maybe_add_record(record)
+                if passes_cheap_filters(record):
+                    add_if_fresh(record)
 
         return listings
 

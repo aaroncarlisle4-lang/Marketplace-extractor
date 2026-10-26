@@ -37,10 +37,10 @@ jobs:
           CONVEX_SITE_URL: ${{ secrets.CONVEX_SITE_URL_FACEBOOK || secrets.CONVEX_SITE_URL }}
           INGEST_SHARED_SECRET: ${{ secrets.INGEST_SHARED_SECRET_FACEBOOK || secrets.INGEST_SHARED_SECRET }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'https://sbgfeqanqznuhnsdekyt.supabase.co' }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY || vars.SUPABASE_SERVICE_ROLE_KEY }}
           SUPABASE_NOTIFY_MODE: ${{ secrets.SUPABASE_NOTIFY_MODE || 'fallback' }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || vars.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID || vars.TELEGRAM_CHAT_ID }}
           FACEBOOK_QUERIES: ${{ secrets.FACEBOOK_QUERIES || 'captains chair,chesterfield captain chair' }}
           FACEBOOK_LISTING_URLS: ${{ secrets.FACEBOOK_LISTING_URLS || '' }}
           FACEBOOK_TARGET_TERMS: ${{ secrets.FACEBOOK_TARGET_TERMS || 'captains chair,captain chair,chesterfield captain chair' }}
