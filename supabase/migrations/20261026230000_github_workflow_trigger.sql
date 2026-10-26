@@ -3,7 +3,7 @@
 -- the Vinted workflow instead. Token lives in Vault as 'github_actions_token'
 -- (fine-grained PAT, this repo only, Actions: read & write):
 --   select vault.create_secret('<token>', 'github_actions_token');
-create extension if not exists pg_net;
+create extension if not exists pg_net with schema extensions;
 
 create schema if not exists private;
 revoke all on schema private from public, anon, authenticated;
