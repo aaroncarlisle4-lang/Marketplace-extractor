@@ -11,7 +11,7 @@ try:
 except ImportError:
     pass
 
-from supabase_backup import run_supabase_backup, supabase_configured
+from supabase_backup import run_supabase_backup, supabase_configured, supabase_is_primary
 from vinted_scraper import scrape_vinted_listings_with_stats
 
 DEFAULT_VINTED_QUERIES = [
@@ -288,6 +288,8 @@ def run_convex(
     # real matches that deserve a Telegram alert.
     if disable_notify:
         notify_result: Dict[str, Any] = {"disabled": True, "reason": "DISABLE_NOTIFY is enabled"}
+    elif supabase_is_primary():
+        notify_result = {"disabled": True, "reason": "Supabase sends alerts (SUPABASE_NOTIFY_MODE=always)"}
     else:
         try:
             notify_result = post_json(notify_url, ingest_secret, {"limit": 100})
@@ -314,9 +316,16 @@ def convex_failure(
 
 
 def finish(convex_error: str | None, supabase_result: Dict[str, Any]) -> int:
-    """Exit 0 as long as one backend handled the cycle; fail only if both did not."""
+    """Exit 0 as long as the backend responsible for alerts handled the cycle."""
     supabase_error = supabase_result.get("error")
     supabase_ok = supabase_result.get("enabled") and not supabase_error
+    if supabase_result.get("notify_mode") == "always":
+        # Supabase is primary; Convex is a best-effort mirror.
+        if convex_error is not None:
+            print(f"::warning::Convex mirror failed: {convex_error}", file=sys.stderr)
+        if supabase_ok:
+            return 0
+        raise RuntimeError(f"Supabase (primary) failed: {supabase_error}")
     if convex_error is None:
         if supabase_error:
             print(f"::warning::Supabase backup failed: {supabase_error}", file=sys.stderr)

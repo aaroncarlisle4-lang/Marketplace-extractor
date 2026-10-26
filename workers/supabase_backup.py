@@ -487,7 +487,7 @@ def run_supabase_backup(
     if not url or not key:
         return {"enabled": False, "reason": "SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY not set"}
 
-    notify_mode = (os.getenv("SUPABASE_NOTIFY_MODE") or "fallback").strip().lower()
+    notify_mode = supabase_notify_mode()
     client = SupabaseClient("".join(url.split()), "".join(key.split()))
     result: Dict[str, Any] = {"enabled": True, "notify_mode": notify_mode}
     run_id: Optional[int] = None
@@ -566,3 +566,12 @@ def run_supabase_backup(
 
 def supabase_configured() -> bool:
     return bool(os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY"))
+
+
+def supabase_notify_mode() -> str:
+    return (os.getenv("SUPABASE_NOTIFY_MODE") or "fallback").strip().lower()
+
+
+def supabase_is_primary() -> bool:
+    """'always' mode: Supabase sends the alerts and Convex is only a mirror."""
+    return supabase_configured() and supabase_notify_mode() == "always"

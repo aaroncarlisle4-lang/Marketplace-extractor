@@ -181,3 +181,26 @@ class TestFinish:
             run_cycle.finish("boom", {"enabled": True, "error": "also boom"})
         with pytest.raises(RuntimeError):
             run_cycle.finish("boom", {"enabled": False, "reason": "not set"})
+
+
+class TestPrimaryMode:
+    def test_always_mode_sends_even_when_convex_ok(self, backend, monkeypatch):
+        monkeypatch.setenv("SUPABASE_NOTIFY_MODE", "always")
+        _, sent = backend
+        result = supabase_backup.run_supabase_backup("vinted", [vinted_listing()], True, False)
+        assert result["notify"]["sent"] == 1 and len(sent) == 1
+
+    def test_convex_notify_skipped_when_supabase_primary(self, monkeypatch):
+        monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
+        monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "k")
+        monkeypatch.setenv("SUPABASE_NOTIFY_MODE", "always")
+        calls = []
+        monkeypatch.setattr(run_cycle, "post_json", lambda url, *_: calls.append(url) or {"inserted": 1})
+        _, notify = run_cycle.run_convex("https://x.convex.site", "s", [vinted_listing()], False)
+        assert notify["disabled"] is True
+        assert calls == ["https://x.convex.site/ingest/listings"]
+
+    def test_finish_in_always_mode(self):
+        assert run_cycle.finish("convex down", {"enabled": True, "notify_mode": "always"}) == 0
+        with pytest.raises(RuntimeError):
+            run_cycle.finish(None, {"enabled": True, "notify_mode": "always", "error": "boom"})
