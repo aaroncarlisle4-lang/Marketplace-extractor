@@ -11,6 +11,8 @@ from facebook_scraper import (
     scrape_facebook_listing_urls_with_stats,
     scrape_facebook_listings_with_stats,
 )
+from run_cycle import convex_failure, finish, run_convex
+from supabase_backup import run_supabase_backup, supabase_configured
 
 DEFAULT_FACEBOOK_QUERIES = [
     "captain's chair",
@@ -110,13 +112,26 @@ def post_json(url: str, secret: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 def main() -> int:
     load_dotenv()
 
-    convex_site_url = normalize_url_env(
-        require_any_env("CONVEX_SITE_URL", "CONVEX_SITE_URL_FACEBOOK")
-    )
-    ingest_secret = require_any_env(
-        "INGEST_SHARED_SECRET",
-        "INGEST_SHARED_SECRET_FACEBOOK",
-    )
+    convex_site_url: str | None = None
+    ingest_secret: str | None = None
+    try:
+        convex_site_url = normalize_url_env(
+            require_any_env("CONVEX_SITE_URL", "CONVEX_SITE_URL_FACEBOOK")
+        )
+        ingest_secret = require_any_env(
+            "INGEST_SHARED_SECRET",
+            "INGEST_SHARED_SECRET_FACEBOOK",
+        )
+    except Exception as exc:  # noqa: BLE001
+        if not supabase_configured():
+            print(json.dumps({
+                "status": "skipped",
+                "reason": "missing_configuration",
+                "error": str(exc),
+            }, indent=2))
+            return 0
+        print(f"::warning::Convex not configured ({exc}); running Supabase-only", file=sys.stderr)
+        convex_site_url = None
 
     queries = parse_list_env(os.getenv("FACEBOOK_QUERIES")) or DEFAULT_FACEBOOK_QUERIES
     listing_urls = parse_list_env(os.getenv("FACEBOOK_LISTING_URLS"))
@@ -209,38 +224,13 @@ def main() -> int:
         )
         return 0
 
-    ingest_url = f"{convex_site_url}/ingest/listings"
-    notify_url = f"{convex_site_url}/jobs/run-notifications"
-
-    # Send in smaller chunks rather than one big request: a single oversized
-    # POST is more likely to make the Convex http action run long enough to be
-    # killed mid-flight, which still leaves earlier batches committed server-side
-    # but reports the whole call as failed.
-    ingest_chunk_size = int(os.getenv("INGEST_CHUNK_SIZE", "100"))
-    ingest_accum = {"inserted": 0, "updated": 0, "matched": 0, "rejected": 0}
-    ingest_errors: List[str] = []
-    for i in range(0, len(listings), ingest_chunk_size):
-        chunk = listings[i : i + ingest_chunk_size]
-        try:
-            chunk_result = post_json(ingest_url, ingest_secret, {"listings": chunk})
-            for key in ingest_accum:
-                ingest_accum[key] += chunk_result.get(key, 0)
-        except Exception as err:  # noqa: BLE001
-            ingest_errors.append(str(err))
-            print(f"ingest chunk of {len(chunk)} listings failed: {err}", file=sys.stderr)
-    ingest_result: Dict[str, Any] = {**ingest_accum, "errors": ingest_errors}
-
-    # Always attempt notifications, even if ingest partially or fully failed:
-    # batches that did commit server-side before a failure can still contain
-    # real matches that deserve a Telegram alert.
-    if disable_notify:
-        notify_result: Dict[str, Any] = {"disabled": True, "reason": "DISABLE_NOTIFY is enabled"}
-    else:
-        try:
-            notify_result = post_json(notify_url, ingest_secret, {"limit": 100})
-        except Exception as err:  # noqa: BLE001
-            notify_result = {"error": str(err)}
-            print(f"notify call failed: {err}", file=sys.stderr)
+    ingest_result, notify_result = run_convex(
+        convex_site_url, ingest_secret, listings, disable_notify
+    )
+    convex_error = convex_failure(ingest_result, notify_result)
+    supabase_result = run_supabase_backup(
+        "facebook", listings, convex_ok=convex_error is None, disable_notify=disable_notify
+    )
 
     print(
         json.dumps(
@@ -256,25 +246,21 @@ def main() -> int:
                 "scrape_by_query": scrape_results_by_query,
                 "ingest": ingest_result,
                 "notify": notify_result,
+                "supabase": supabase_result,
             },
             indent=2,
         )
     )
 
-    if ingest_errors:
-        raise RuntimeError(
-            f"{len(ingest_errors)} of "
-            f"{(len(listings) + ingest_chunk_size - 1) // ingest_chunk_size} ingest chunk(s) failed: "
-            f"{'; '.join(ingest_errors[:3])}"
-        )
-    if isinstance(notify_result, dict) and notify_result.get("error"):
-        raise RuntimeError(f"notify call failed: {notify_result['error']}")
-    return 0
+    return finish(convex_error, supabase_result)
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:  # noqa: BLE001
-        print(f"run_cycle_facebook failed: {exc}", file=sys.stderr)
+        print(json.dumps({
+            "status": "failed",
+            "error": str(exc),
+        }, indent=2), file=sys.stderr)
         raise

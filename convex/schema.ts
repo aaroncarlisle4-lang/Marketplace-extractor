@@ -45,6 +45,7 @@ export default defineSchema({
   })
     .index("by_source_listingId", ["source", "listingId"])
     .index("by_eligible", ["eligibleForNotify"])
+    .index("by_eligible_updatedAtMs", ["eligibleForNotify", "updatedAtMs"])
     .index("by_freshness", ["freshnessBucket"]),
 
   notifications: defineTable({

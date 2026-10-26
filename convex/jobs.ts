@@ -3,6 +3,9 @@ import { internal } from "./_generated/api";
 import { internalAction, internalMutation, internalQuery } from "./_generated/server";
 
 const NOTIFY_MAX_ATTEMPTS = 5;
+// Only matches touched by an ingest within this window can still pass the
+// per-source age limits below (max 60m), so don't read anything older.
+const NOTIFY_LOOKBACK_MINUTES = 90;
 const NOTIFY_RESEND_COOLDOWN_MINUTES = Math.max(
   0,
   Number.parseInt(process.env.NOTIFY_RESEND_COOLDOWN_MINUTES ?? "180", 10) || 0,
@@ -30,6 +33,24 @@ export const runNotificationPass = internalAction({
     }
 
     const startedAtMs = Date.now();
+    const pending = await ctx.runQuery(internal.jobs.getPendingMatches, {
+      limit: args.limit ?? 100,
+      sinceMs: startedAtMs - NOTIFY_LOOKBACK_MINUTES * 60 * 1000,
+    });
+
+    // Nothing to do: skip writing a run record so idle cron ticks stay cheap.
+    if (pending.length === 0) {
+      return {
+        sent: 0,
+        failed: 0,
+        skipped: 0,
+        pending: 0,
+        skippedAlreadySent: 0,
+        skippedMaxAttempts: 0,
+        resendCooldownMinutes: NOTIFY_RESEND_COOLDOWN_MINUTES,
+      };
+    }
+
     const runId = await ctx.runMutation(internal.jobs.startRun, {
       kind: "notify",
       startedAtMs,
@@ -42,10 +63,6 @@ export const runNotificationPass = internalAction({
     let skippedMaxAttempts = 0;
 
     try {
-      const pending = await ctx.runQuery(internal.jobs.getPendingMatches, {
-        limit: args.limit ?? 100,
-      });
-
       for (const item of pending) {
         const idempotencyKey = keyFor(item.source, item.listingId);
 
@@ -198,11 +215,13 @@ export const finishRun = internalMutation({
 });
 
 export const getPendingMatches = internalQuery({
-  args: { limit: v.number() },
+  args: { limit: v.number(), sinceMs: v.number() },
   handler: async (ctx, args) => {
     const matches = await ctx.db
       .query("matches")
-      .withIndex("by_eligible", (q) => q.eq("eligibleForNotify", true))
+      .withIndex("by_eligible_updatedAtMs", (q) =>
+        q.eq("eligibleForNotify", true).gte("updatedAtMs", args.sinceMs),
+      )
       .order("desc")
       .take(args.limit * 12);
 

@@ -11,6 +11,7 @@ try:
 except ImportError:
     pass
 
+from supabase_backup import run_supabase_backup, supabase_configured
 from vinted_scraper import scrape_vinted_listings_with_stats
 
 DEFAULT_VINTED_QUERIES = [
@@ -138,16 +139,23 @@ def post_json(url: str, secret: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def main() -> int:
+    # Convex is the primary backend; Supabase (if configured) is a mirror that
+    # also takes over Telegram alerts when Convex fails. Either one is enough.
+    convex_site_url: str | None = None
+    ingest_secret: str | None = None
     try:
         convex_site_url = normalize_url_env(require_env("CONVEX_SITE_URL"))
         ingest_secret = require_env("INGEST_SHARED_SECRET")
     except Exception as exc:  # noqa: BLE001
-        print(json.dumps({
-            "status": "skipped",
-            "reason": "missing_configuration",
-            "error": str(exc),
-        }, indent=2))
-        return 0
+        if not supabase_configured():
+            print(json.dumps({
+                "status": "skipped",
+                "reason": "missing_configuration",
+                "error": str(exc),
+            }, indent=2))
+            return 0
+        print(f"::warning::Convex not configured ({exc}); running Supabase-only", file=sys.stderr)
+        convex_site_url = None
 
     queries = parse_list_env(os.getenv("VINTED_QUERIES"))
     if not queries:
@@ -218,6 +226,38 @@ def main() -> int:
         }, indent=2))
         return 0
 
+    ingest_result, notify_result = run_convex(
+        convex_site_url, ingest_secret, listings, disable_notify
+    )
+    convex_error = convex_failure(ingest_result, notify_result)
+    supabase_result = run_supabase_backup(
+        "vinted", listings, convex_ok=convex_error is None, disable_notify=disable_notify
+    )
+
+    print(json.dumps({
+        "scraped": len(listings),
+        "queries": queries,
+        "target_terms": target_terms,
+        "strict_target_only": strict_target_only,
+        "scrape_by_query": scrape_results_by_query,
+        "screen_only_mode": disable_notify,
+        "ingest": ingest_result,
+        "notify": notify_result,
+        "supabase": supabase_result,
+    }, indent=2))
+
+    return finish(convex_error, supabase_result)
+
+
+def run_convex(
+    convex_site_url: str | None,
+    ingest_secret: str | None,
+    listings: List[Dict[str, Any]],
+    disable_notify: bool,
+) -> tuple[Dict[str, Any] | None, Dict[str, Any] | None]:
+    if not convex_site_url or not ingest_secret:
+        return None, None
+
     ingest_url = f"{convex_site_url}/ingest/listings"
     notify_url = f"{convex_site_url}/jobs/run-notifications"
 
@@ -237,7 +277,11 @@ def main() -> int:
         except Exception as err:  # noqa: BLE001
             ingest_errors.append(str(err))
             print(f"ingest chunk of {len(chunk)} listings failed: {err}", file=sys.stderr)
-    ingest_result: Dict[str, Any] = {**ingest_accum, "errors": ingest_errors}
+    ingest_result: Dict[str, Any] = {
+        **ingest_accum,
+        "errors": ingest_errors,
+        "chunks": (len(listings) + ingest_chunk_size - 1) // ingest_chunk_size,
+    }
 
     # Always attempt notifications, even if ingest partially or fully failed:
     # batches that did commit server-side before a failure can still contain
@@ -250,27 +294,42 @@ def main() -> int:
         except Exception as err:  # noqa: BLE001
             notify_result = {"error": str(err)}
             print(f"notify call failed: {err}", file=sys.stderr)
+    return ingest_result, notify_result
 
-    print(json.dumps({
-        "scraped": len(listings),
-        "queries": queries,
-        "target_terms": target_terms,
-        "strict_target_only": strict_target_only,
-        "scrape_by_query": scrape_results_by_query,
-        "screen_only_mode": disable_notify,
-        "ingest": ingest_result,
-        "notify": notify_result,
-    }, indent=2))
 
-    if ingest_errors:
-        raise RuntimeError(
-            f"{len(ingest_errors)} of "
-            f"{(len(listings) + ingest_chunk_size - 1) // ingest_chunk_size} ingest chunk(s) failed: "
-            f"{'; '.join(ingest_errors[:3])}"
+def convex_failure(
+    ingest_result: Dict[str, Any] | None, notify_result: Dict[str, Any] | None
+) -> str | None:
+    if ingest_result is None:
+        return "Convex not configured"
+    errors = ingest_result.get("errors") or []
+    if errors:
+        return (
+            f"{len(errors)} of {ingest_result.get('chunks', '?')} ingest chunk(s) failed: "
+            f"{'; '.join(errors[:3])}"
         )
     if isinstance(notify_result, dict) and notify_result.get("error"):
-        raise RuntimeError(f"notify call failed: {notify_result['error']}")
-    return 0
+        return f"notify call failed: {notify_result['error']}"
+    return None
+
+
+def finish(convex_error: str | None, supabase_result: Dict[str, Any]) -> int:
+    """Exit 0 as long as one backend handled the cycle; fail only if both did not."""
+    supabase_error = supabase_result.get("error")
+    supabase_ok = supabase_result.get("enabled") and not supabase_error
+    if convex_error is None:
+        if supabase_error:
+            print(f"::warning::Supabase backup failed: {supabase_error}", file=sys.stderr)
+        return 0
+    if supabase_ok:
+        print(
+            f"::warning::Convex failed, Supabase fallback handled this cycle: {convex_error}",
+            file=sys.stderr,
+        )
+        return 0
+    raise RuntimeError(
+        f"Convex: {convex_error}; Supabase: {supabase_error or supabase_result.get('reason')}"
+    )
 
 
 if __name__ == "__main__":

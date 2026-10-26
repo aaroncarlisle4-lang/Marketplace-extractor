@@ -12,7 +12,7 @@ crons.interval(
 
 crons.interval(
   "run pending notification pass",
-  { minutes: 1 },
+  { minutes: 5 },
   internal.jobs.runNotificationPass,
   { limit: 100 },
 );
