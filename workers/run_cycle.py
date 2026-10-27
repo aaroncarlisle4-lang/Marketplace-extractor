@@ -1,17 +1,15 @@
 import json
 import os
 import sys
-import time
 from typing import Any, Dict, List
 
-import requests
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
 
-from supabase_backup import run_supabase_backup, supabase_configured, supabase_is_primary
+from supabase_backup import run_supabase
 from vinted_scraper import scrape_vinted_listings_with_stats
 
 DEFAULT_VINTED_QUERIES = [
@@ -71,14 +69,6 @@ def require_env(name: str) -> str:
     return value
 
 
-def normalize_url_env(value: str) -> str:
-    # Guard against accidental newlines/spaces in GitHub secrets.
-    cleaned = "".join(value.split()).rstrip("/")
-    if not cleaned.startswith("http://") and not cleaned.startswith("https://"):
-        raise RuntimeError(f"Invalid URL env value: {cleaned}")
-    return cleaned
-
-
 def drop_none_values(obj: Any) -> Any:
     if isinstance(obj, dict):
         return {k: drop_none_values(v) for k, v in obj.items() if v is not None}
@@ -94,68 +84,10 @@ def parse_list_env(value: str | None) -> List[str]:
     return [part for part in parts if part]
 
 
-MAX_POST_ATTEMPTS = 4
-POST_BACKOFF_SECONDS = [3, 8, 20]  # one entry per retry (len == MAX_POST_ATTEMPTS - 1)
-# Kept short on purpose: the calling workflows have a 10-minute job timeout and
-# scraping alone can take up to MAX_RUNTIME_SECONDS, so retries must not eat that budget.
-
-
-def post_json(url: str, secret: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    last_error: Exception | None = None
-    for attempt in range(1, MAX_POST_ATTEMPTS + 1):
-        try:
-            response = requests.post(
-                url,
-                headers={
-                    "content-type": "application/json",
-                    "x-ingest-secret": secret,
-                },
-                data=json.dumps(payload),
-                timeout=60,
-            )
-            if not response.ok:
-                try:
-                    print(
-                        f"[attempt {attempt}] HTTP {response.status_code} from {url}: {response.text[:2000]}",
-                        file=sys.stderr,
-                    )
-                except Exception:
-                    pass
-                # Client errors (4xx) won't be fixed by retrying — fail fast.
-                if 400 <= response.status_code < 500:
-                    response.raise_for_status()
-            response.raise_for_status()
-            return response.json()
-        except requests.exceptions.HTTPError as err:
-            last_error = err
-            status = err.response.status_code if err.response is not None else None
-            if status is not None and 400 <= status < 500:
-                break
-        except Exception as err:  # noqa: BLE001
-            last_error = err
-        if attempt < MAX_POST_ATTEMPTS:
-            time.sleep(POST_BACKOFF_SECONDS[attempt - 1])
-    raise RuntimeError(f"POST failed for {url}: {last_error}")
-
-
 def main() -> int:
-    # Convex is the primary backend; Supabase (if configured) is a mirror that
-    # also takes over Telegram alerts when Convex fails. Either one is enough.
-    convex_site_url: str | None = None
-    ingest_secret: str | None = None
-    try:
-        convex_site_url = normalize_url_env(require_env("CONVEX_SITE_URL"))
-        ingest_secret = require_env("INGEST_SHARED_SECRET")
-    except Exception as exc:  # noqa: BLE001
-        if not supabase_configured():
-            print(json.dumps({
-                "status": "skipped",
-                "reason": "missing_configuration",
-                "error": str(exc),
-            }, indent=2))
-            return 0
-        print(f"::warning::Convex not configured ({exc}); running Supabase-only", file=sys.stderr)
-        convex_site_url = None
+    # Supabase stores listings and sends the alerts; Convex is no longer used.
+    require_env("SUPABASE_URL")
+    require_env("SUPABASE_SERVICE_ROLE_KEY")
 
     queries = parse_list_env(os.getenv("VINTED_QUERIES"))
     if not queries:
@@ -221,18 +153,11 @@ def main() -> int:
             "target_terms": target_terms,
             "strict_target_only": strict_target_only,
             "scrape_by_query": scrape_results_by_query,
-            "ingest": None,
-            "notify": None,
+            "supabase": None,
         }, indent=2))
         return 0
 
-    ingest_result, notify_result = run_convex(
-        convex_site_url, ingest_secret, listings, disable_notify
-    )
-    convex_error = convex_failure(ingest_result, notify_result)
-    supabase_result = run_supabase_backup(
-        "vinted", listings, convex_ok=convex_error is None, disable_notify=disable_notify
-    )
+    supabase_result = run_supabase("vinted", listings, disable_notify=disable_notify)
 
     print(json.dumps({
         "scraped": len(listings),
@@ -241,104 +166,17 @@ def main() -> int:
         "strict_target_only": strict_target_only,
         "scrape_by_query": scrape_results_by_query,
         "screen_only_mode": disable_notify,
-        "ingest": ingest_result,
-        "notify": notify_result,
         "supabase": supabase_result,
     }, indent=2))
 
-    return finish(convex_error, supabase_result)
+    return finish(supabase_result)
 
 
-def run_convex(
-    convex_site_url: str | None,
-    ingest_secret: str | None,
-    listings: List[Dict[str, Any]],
-    disable_notify: bool,
-) -> tuple[Dict[str, Any] | None, Dict[str, Any] | None]:
-    if not convex_site_url or not ingest_secret:
-        return None, None
-
-    ingest_url = f"{convex_site_url}/ingest/listings"
-    notify_url = f"{convex_site_url}/jobs/run-notifications"
-
-    # Send in smaller chunks rather than one big request: a single oversized
-    # POST is more likely to make the Convex http action run long enough to be
-    # killed mid-flight, which still leaves earlier batches committed server-side
-    # but reports the whole call as failed.
-    ingest_chunk_size = int(os.getenv("INGEST_CHUNK_SIZE", "100"))
-    ingest_accum = {"inserted": 0, "updated": 0, "matched": 0, "rejected": 0}
-    ingest_errors: List[str] = []
-    for i in range(0, len(listings), ingest_chunk_size):
-        chunk = listings[i : i + ingest_chunk_size]
-        try:
-            chunk_result = post_json(ingest_url, ingest_secret, {"listings": chunk})
-            for key in ingest_accum:
-                ingest_accum[key] += chunk_result.get(key, 0)
-        except Exception as err:  # noqa: BLE001
-            ingest_errors.append(str(err))
-            print(f"ingest chunk of {len(chunk)} listings failed: {err}", file=sys.stderr)
-    ingest_result: Dict[str, Any] = {
-        **ingest_accum,
-        "errors": ingest_errors,
-        "chunks": (len(listings) + ingest_chunk_size - 1) // ingest_chunk_size,
-    }
-
-    # Always attempt notifications, even if ingest partially or fully failed:
-    # batches that did commit server-side before a failure can still contain
-    # real matches that deserve a Telegram alert.
-    if disable_notify:
-        notify_result: Dict[str, Any] = {"disabled": True, "reason": "DISABLE_NOTIFY is enabled"}
-    elif supabase_is_primary():
-        notify_result = {"disabled": True, "reason": "Supabase sends alerts (SUPABASE_NOTIFY_MODE=always)"}
-    else:
-        try:
-            notify_result = post_json(notify_url, ingest_secret, {"limit": 100})
-        except Exception as err:  # noqa: BLE001
-            notify_result = {"error": str(err)}
-            print(f"notify call failed: {err}", file=sys.stderr)
-    return ingest_result, notify_result
-
-
-def convex_failure(
-    ingest_result: Dict[str, Any] | None, notify_result: Dict[str, Any] | None
-) -> str | None:
-    if ingest_result is None:
-        return "Convex not configured"
-    errors = ingest_result.get("errors") or []
-    if errors:
-        return (
-            f"{len(errors)} of {ingest_result.get('chunks', '?')} ingest chunk(s) failed: "
-            f"{'; '.join(errors[:3])}"
-        )
-    if isinstance(notify_result, dict) and notify_result.get("error"):
-        return f"notify call failed: {notify_result['error']}"
-    return None
-
-
-def finish(convex_error: str | None, supabase_result: Dict[str, Any]) -> int:
-    """Exit 0 as long as the backend responsible for alerts handled the cycle."""
-    supabase_error = supabase_result.get("error")
-    supabase_ok = supabase_result.get("enabled") and not supabase_error
-    if supabase_result.get("notify_mode") == "always":
-        # Supabase is primary; Convex is a best-effort mirror.
-        if convex_error is not None:
-            print(f"::warning::Convex mirror failed: {convex_error}", file=sys.stderr)
-        if supabase_ok:
-            return 0
-        raise RuntimeError(f"Supabase (primary) failed: {supabase_error}")
-    if convex_error is None:
-        if supabase_error:
-            print(f"::warning::Supabase backup failed: {supabase_error}", file=sys.stderr)
-        return 0
-    if supabase_ok:
-        print(
-            f"::warning::Convex failed, Supabase fallback handled this cycle: {convex_error}",
-            file=sys.stderr,
-        )
-        return 0
-    raise RuntimeError(
-        f"Convex: {convex_error}; Supabase: {supabase_error or supabase_result.get('reason')}"
-    )
+def finish(supabase_result: Dict[str, Any]) -> int:
+    error = supabase_result.get("error")
+    if error:
+        raise RuntimeError(f"Supabase failed: {error}")
+    return 0
 
 
 if __name__ == "__main__":

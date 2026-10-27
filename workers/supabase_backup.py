@@ -1,15 +1,14 @@
-"""Supabase backup + Telegram failover for the worker cycles.
+"""Supabase store + Telegram notifier for the worker cycles.
 
-Every cycle mirrors its scraped listings into Supabase (screened with a Python
-port of convex/lib/screening.ts). Convex stays the primary notifier; when the
-Convex ingest or notify call fails, the worker sends the Telegram alerts itself
-and records them in Supabase so the same listing is never alerted twice by the
-fallback.
+Every cycle upserts its scraped listings into Supabase (screened with a Python
+port of convex/lib/screening.ts) and sends a Telegram photo alert for each
+eligible listing. Supabase's notifications table is the single dedupe record:
+a listing is claimed there before its alert is sent, so it is alerted at most
+once even if a run is cancelled mid-send. Convex is no longer used.
 
 Env:
-    SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY   enable the backup (skipped if unset)
-    TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID      needed for fallback notifications
-    SUPABASE_NOTIFY_MODE                      fallback (default) | always | off
+    SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY   required
+    TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID      required to send alerts
 """
 
 import json
@@ -23,6 +22,15 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 import requests
 
 NOTIFY_MAX_ATTEMPTS = 5
+TELEGRAM_CAPTION_LIMIT = 1024
+IMAGE_MAX_BYTES = 10 * 1024 * 1024
+BROWSER_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+    ),
+    "Accept": "image/avif,image/webp,image/png,image/jpeg,*/*;q=0.8",
+}
 UPSERT_CHUNK_SIZE = 200
 MAX_FUTURE_SKEW_MS = 5 * 60 * 1000
 
@@ -317,15 +325,84 @@ def format_alert(listing: Dict[str, Any], match: Dict[str, Any]) -> str:
     )
 
 
-def send_telegram(token: str, chat_id: str, text: str) -> None:
-    response = requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        headers={"Content-Type": "application/json"},
-        data=json.dumps({"chat_id": chat_id, "text": text, "disable_web_page_preview": False}),
-        timeout=30,
-    )
+def _telegram(token: str, method: str, **kwargs: Any) -> None:
+    response = requests.post(f"https://api.telegram.org/bot{token}/{method}", timeout=30, **kwargs)
     if not response.ok:
-        raise RuntimeError(f"Telegram send failed: {response.status_code} {response.text[:500]}")
+        raise RuntimeError(f"Telegram {method} failed: {response.status_code} {response.text[:500]}")
+
+
+def find_page_image(url: str) -> Optional[str]:
+    """og:image of the listing page, for listings scraped without a photo."""
+    try:
+        response = requests.get(url, headers={**BROWSER_HEADERS, "Accept": "text/html"}, timeout=15)
+    except requests.RequestException:
+        return None
+    if not response.ok:
+        return None
+    m = re.search(
+        r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)', response.text
+    ) or re.search(
+        r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image["\']', response.text
+    )
+    return m.group(1).replace("&amp;", "&") if m else None
+
+
+def download_image(url: str) -> Tuple[bytes, str]:
+    """Fetch the image ourselves (marketplace CDNs often refuse Telegram's
+    fetcher) and convert formats Telegram won't show as a photo, e.g. WebP."""
+    response = requests.get(url, headers=BROWSER_HEADERS, timeout=20)
+    response.raise_for_status()
+    data = response.content
+    if not data or len(data) > IMAGE_MAX_BYTES:
+        raise RuntimeError(f"image unusable ({len(data)} bytes)")
+    if data[:3] == b"\xff\xd8\xff":
+        return data, "image/jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return data, "image/png"
+    from io import BytesIO
+
+    from PIL import Image
+
+    out = BytesIO()
+    Image.open(BytesIO(data)).convert("RGB").save(out, format="JPEG", quality=90)
+    return out.getvalue(), "image/jpeg"
+
+
+def send_alert(token: str, chat_id: str, listing: Dict[str, Any], match: Dict[str, Any]) -> str:
+    """Send the alert as a photo with the details as its caption.
+
+    Returns "photo", or "text" if no image could be found or delivered (the
+    text alert is still sent so a listing is never silently dropped).
+    """
+    caption = format_alert(listing, match)
+    image_url = listing.get("imageUrl") or find_page_image(listing["url"])
+    if image_url:
+        try:
+            data, mime = download_image(image_url)
+            _telegram(
+                token,
+                "sendPhoto",
+                data={"chat_id": chat_id, "caption": caption[:TELEGRAM_CAPTION_LIMIT]},
+                files={"photo": ("listing.jpg" if mime == "image/jpeg" else "listing.png", data, mime)},
+            )
+            return "photo"
+        except Exception as err:  # noqa: BLE001
+            print(f"photo upload failed for {listing['url']}: {err}", file=sys.stderr)
+        try:
+            _telegram(
+                token,
+                "sendPhoto",
+                json={"chat_id": chat_id, "photo": image_url, "caption": caption[:TELEGRAM_CAPTION_LIMIT]},
+            )
+            return "photo"
+        except Exception as err:  # noqa: BLE001
+            print(f"photo by URL failed for {listing['url']}: {err}", file=sys.stderr)
+    _telegram(
+        token,
+        "sendMessage",
+        json={"chat_id": chat_id, "text": f"{caption}\n(no image available)", "disable_web_page_preview": False},
+    )
+    return "text"
 
 
 # --- Supabase REST -----------------------------------------------------------
@@ -383,6 +460,23 @@ class SupabaseClient:
             "PATCH", table, params=match, headers={"Prefer": "return=minimal"}, data=json.dumps(values)
         )
 
+    def insert_if_absent(self, table: str, row: Dict[str, Any], on_conflict: str) -> bool:
+        """Insert row unless its key exists; True if this call inserted it."""
+        response = self._request(
+            "POST",
+            f"{table}?on_conflict={on_conflict}",
+            headers={"Prefer": "resolution=ignore-duplicates,return=representation"},
+            data=json.dumps([row]),
+        )
+        return bool(response.json())
+
+    def update_returning(
+        self, table: str, match: Dict[str, str], values: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        return self._request(
+            "PATCH", table, params=match, headers={"Prefer": "return=representation"}, data=json.dumps(values)
+        ).json()
+
 
 def _listing_row(listing: Dict[str, Any], match: Dict[str, Any], now_iso: str) -> Dict[str, Any]:
     return {
@@ -418,82 +512,99 @@ def _max_notify_age_minutes(source: str) -> int:
     return 5 if source == "facebook_marketplace_uk" else 60
 
 
-def _send_fallback_alerts(
+def _claim(client: SupabaseClient, key: str, listing: Dict[str, Any], now_iso: str) -> bool:
+    """Reserve a listing's alert before sending it.
+
+    The claimed row is written as status 'sent' with no sent_at; sent_at is
+    filled in once Telegram accepts the message. A run killed between claim
+    and send therefore never resends (at-most-once), which is what stops the
+    duplicate alerts. Previously failed alerts are re-claimed for a retry.
+    """
+    row = {
+        "idempotency_key": key,
+        "source": listing["source"],
+        "listing_id": listing["listingId"],
+        "status": "sent",
+        "attempts": 1,
+        "sent_at": None,
+        "last_error": None,
+        "updated_at": now_iso,
+    }
+    if client.insert_if_absent("notifications", row, on_conflict="idempotency_key"):
+        return True
+    for prior in client.select(
+        "notifications",
+        {"select": "status,attempts", "idempotency_key": f"eq.{key}", "status": "eq.failed"},
+    ):
+        if prior["attempts"] >= NOTIFY_MAX_ATTEMPTS:
+            return False
+        return bool(client.update_returning(
+            "notifications",
+            {"idempotency_key": f"eq.{key}", "status": "eq.failed", "attempts": f"eq.{prior['attempts']}"},
+            {"status": "sent", "attempts": prior["attempts"] + 1, "last_error": None, "updated_at": now_iso},
+        ))
+    return False
+
+
+def _send_alerts(
     client: SupabaseClient,
     eligible: List[Tuple[Dict[str, Any], Dict[str, Any]]],
 ) -> Dict[str, Any]:
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     chat_id = os.getenv("TELEGRAM_CHAT_ID")
     if not token or not chat_id:
-        return {"error": "TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set; cannot send fallback alerts"}
+        return {"error": "TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID not set; cannot send alerts"}
 
-    sent = failed = skipped = 0
+    sent = failed = skipped = without_image = 0
     errors: List[str] = []
-    keys = [f"{l['source']}:{l['listingId']}" for l, _ in eligible]
-    existing: Dict[str, Dict[str, Any]] = {}
-    for i in range(0, len(keys), 50):
-        batch = keys[i : i + 50]
-        in_list = ",".join(f'"{k}"' for k in batch)
-        for row in client.select(
-            "notifications",
-            {"select": "idempotency_key,status,attempts", "idempotency_key": f"in.({in_list})"},
-        ):
-            existing[row["idempotency_key"]] = row
-
-    now_iso = datetime.now(timezone.utc).isoformat()
-    for (listing, match), key in zip(eligible, keys):
-        prior = existing.get(key)
-        if prior and (prior["status"] == "sent" or prior["attempts"] >= NOTIFY_MAX_ATTEMPTS):
+    for listing, match in eligible:
+        key = f"{listing['source']}:{listing['listingId']}"
+        now_iso = datetime.now(timezone.utc).isoformat()
+        if not _claim(client, key, listing, now_iso):
             skipped += 1
             continue
         try:
-            send_telegram(token, chat_id, format_alert(listing, match))
-            status, last_error = "sent", None
+            if send_alert(token, chat_id, listing, match) == "text":
+                without_image += 1
+            values: Dict[str, Any] = {"sent_at": now_iso}
             sent += 1
         except Exception as err:  # noqa: BLE001
-            status, last_error = "failed", str(err)
+            values = {"status": "failed", "last_error": str(err)[:1000]}
             failed += 1
             errors.append(str(err))
-        client.upsert(
-            "notifications",
-            [{
-                "idempotency_key": key,
-                "source": listing["source"],
-                "listing_id": listing["listingId"],
-                "status": status,
-                "attempts": (prior["attempts"] + 1) if prior else 1,
-                "sent_at": now_iso if status == "sent" else None,
-                "last_error": last_error,
-                "updated_at": now_iso,
-            }],
-            on_conflict="idempotency_key",
-        )
-    return {"sent": sent, "failed": failed, "skipped": skipped, "errors": errors[:3]}
+        try:
+            client.update("notifications", {"idempotency_key": f"eq.{key}"}, {**values, "updated_at": now_iso})
+        except Exception as err:  # noqa: BLE001
+            print(f"notification record update failed for {key}: {err}", file=sys.stderr)
+    return {
+        "sent": sent,
+        "failed": failed,
+        "skipped": skipped,
+        "without_image": without_image,
+        "errors": errors[:3],
+    }
 
 
-def run_supabase_backup(
+def run_supabase(
     kind: str,
     raw_listings: List[Dict[str, Any]],
-    convex_ok: bool,
     disable_notify: bool,
 ) -> Dict[str, Any]:
-    """Mirror listings into Supabase and, if Convex failed, send alerts directly.
+    """Store listings in Supabase and send Telegram alerts for eligible ones.
 
-    Never raises: returns a result dict with an "error" key instead, so a
-    Supabase problem can't break the primary Convex path.
+    Never raises: returns a result dict with an "error" key instead.
     """
     url = os.getenv("SUPABASE_URL")
     key = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
     if not url or not key:
-        return {"enabled": False, "reason": "SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY not set"}
+        return {"enabled": False, "error": "SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY not set"}
 
-    notify_mode = supabase_notify_mode()
     client = SupabaseClient("".join(url.split()), "".join(key.split()))
-    result: Dict[str, Any] = {"enabled": True, "notify_mode": notify_mode}
+    result: Dict[str, Any] = {"enabled": True}
     run_id: Optional[int] = None
 
     try:
-        run_id = client.insert_returning("runs", {"kind": kind, "convex_ok": convex_ok})["id"]
+        run_id = client.insert_returning("runs", {"kind": kind})["id"]
     except Exception as err:  # noqa: BLE001
         print(f"supabase run record failed: {err}", file=sys.stderr)
 
@@ -525,12 +636,10 @@ def run_supabase_backup(
             eligible=len(eligible),
         )
 
-        fallback = notify_mode == "always" or (notify_mode == "fallback" and not convex_ok)
-        result["fallback_notify"] = fallback
         if disable_notify:
             result["notify"] = {"disabled": True}
-        elif fallback and eligible:
-            result["notify"] = _send_fallback_alerts(client, eligible)
+        elif eligible:
+            result["notify"] = _send_alerts(client, eligible)
         else:
             result["notify"] = None
     except Exception as err:  # noqa: BLE001
@@ -552,7 +661,6 @@ def run_supabase_backup(
                     "sent": notify.get("sent", 0),
                     "failed": notify.get("failed", 0),
                     "skipped": notify.get("skipped", 0),
-                    "fallback_notify": bool(result.get("fallback_notify")),
                     "error": result.get("error") or notify.get("error"),
                 },
             )
@@ -562,16 +670,3 @@ def run_supabase_backup(
     if isinstance(result.get("notify"), dict) and result["notify"].get("error"):
         result["error"] = result.get("error") or result["notify"]["error"]
     return result
-
-
-def supabase_configured() -> bool:
-    return bool(os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_SERVICE_ROLE_KEY"))
-
-
-def supabase_notify_mode() -> str:
-    return (os.getenv("SUPABASE_NOTIFY_MODE") or "fallback").strip().lower()
-
-
-def supabase_is_primary() -> bool:
-    """'always' mode: Supabase sends the alerts and Convex is only a mirror."""
-    return supabase_configured() and supabase_notify_mode() == "always"

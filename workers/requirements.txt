@@ -4,3 +4,4 @@ selenium==4.28.1
 tenacity==9.0.0
 python-dateutil==2.9.0.post0
 pydantic==2.10.6
+Pillow==11.3.0

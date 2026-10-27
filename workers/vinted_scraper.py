@@ -5,7 +5,7 @@ import urllib.parse
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from time import monotonic, sleep
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 try:
     from selenium import webdriver
@@ -168,6 +168,27 @@ def extract_upload_age_minutes(html: str) -> Optional[int]:
     return None
 
 
+def _photo_url(photo: Any) -> Optional[str]:
+    """Best image URL from a Vinted photo object (old and 2026 catalog formats)."""
+    if isinstance(photo, str):
+        return photo or None
+    if not isinstance(photo, dict):
+        return None
+    for key in ("url", "fullSizeUrl", "full_size_url", "imageUrl"):
+        if isinstance(photo.get(key), str) and photo[key]:
+            return photo[key]
+    thumbnails = photo.get("thumbnails") or []
+    urls = [t.get("url") for t in thumbnails if isinstance(t, dict) and t.get("url")]
+    return urls[-1] if urls else None
+
+
+def _og_image(html: str) -> Optional[str]:
+    m = re.search(r'<meta[^>]+property="og:image"[^>]+content="([^"]+)"', html) or re.search(
+        r'<meta[^>]+content="([^"]+)"[^>]+property="og:image"', html
+    )
+    return m.group(1).replace("&amp;", "&") if m else None
+
+
 def _label_value(label: str, key: str) -> Optional[str]:
     match = re.search(rf"\b{key}:\s*([^,]+)", label or "")
     return match.group(1).strip() if match else None
@@ -327,7 +348,9 @@ class VintedScraper:
         return items
 
     def _fetch_upload_age_minutes(self, url: str) -> Optional[int]:
+        """Upload age from the item page; also keeps its og:image in _last_page_image."""
         self.stats["listing_pages_scraped"] += 1
+        self._last_page_image: Optional[str] = None
         try:
             self.driver.get(url)
         except TimeoutException:
@@ -338,7 +361,9 @@ class VintedScraper:
         except Exception:
             return None
         try:
-            return extract_upload_age_minutes(self.driver.page_source)
+            page_source = self.driver.page_source
+            self._last_page_image = _og_image(page_source)
+            return extract_upload_age_minutes(page_source)
         except Exception:
             return None
 
@@ -472,7 +497,8 @@ class VintedScraper:
             "views": item.get("view_count"),
             "interested": item.get("favourite_count"),
             "description": item.get("description"),
-            "imageUrl": (item.get("photo") or {}).get("url"),
+            "imageUrl": _photo_url(item.get("photo"))
+            or next(filter(None, map(_photo_url, item.get("photos") or [])), None),
         }
 
     def _record_from_product_item(self, item: Dict) -> Optional[Dict]:
@@ -497,7 +523,9 @@ class VintedScraper:
         item_box = product.get("itemBox") or {}
         label = item_box.get("accessibilityLabel") or ""
         photos = product.get("photos") or []
-        image_url = (photos[0] or {}).get("url") if photos else product.get("thumbnailUrl")
+        image_url = next(filter(None, map(_photo_url, photos)), None) or _photo_url(
+            product.get("thumbnailUrl") or product.get("photo")
+        )
 
         return {
             "source": "vinted_uk",
@@ -606,6 +634,8 @@ class VintedScraper:
                 record["publishedAt"] = datetime.fromtimestamp(
                     now_ts - age * 60, timezone.utc
                 ).isoformat()
+                if not record.get("imageUrl"):
+                    record["imageUrl"] = getattr(self, "_last_page_image", None)
                 listings.append(record)
 
         for page in range(1, config.max_pages + 1):

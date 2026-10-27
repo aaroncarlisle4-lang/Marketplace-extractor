@@ -1,27 +1,8 @@
 import { cronJobs } from "convex/server";
-import { internal } from "./_generated/api";
 
+// Convex is retired: Supabase pg_cron dispatches the workflows and the
+// worker sends alerts via Supabase. No Convex crons may run, otherwise
+// Convex sends its own Telegram alerts and duplicates every listing.
 const crons = cronJobs();
-
-crons.interval(
-  "trigger github vinted cycle",
-  { minutes: 10 },
-  internal.githubTrigger.triggerVintedCycle,
-  {},
-);
-
-crons.interval(
-  "run pending notification pass",
-  { minutes: 5 },
-  internal.jobs.runNotificationPass,
-  { limit: 100 },
-);
-
-crons.interval(
-  "prune old listings",
-  { hours: 1 },
-  internal.admin.pruneOldListings,
-  {},
-);
 
 export default crons;

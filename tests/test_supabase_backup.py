@@ -82,39 +82,95 @@ class TestScreening:
 
 
 class FakeSupabase:
-    def __init__(self, existing=None):
-        self.tables = {"listings": {}, "notifications": dict(existing or {}), "runs": {}}
+    """Minimal PostgREST stand-in covering the calls supabase_backup makes."""
 
-    def handle(self, method, url, params=None, data=None, **_):
+    def __init__(self):
+        self.tables = {"listings": {}, "notifications": {}, "runs": {}}
+
+    def handle(self, method, url, params=None, data=None, headers=None, **_):
         table = url.split("/rest/v1/")[1].split("?")[0]
         body = json.loads(data) if data else None
+        prefer = (headers or {}).get("Prefer", "")
         if method == "POST" and table == "runs":
             self.tables["runs"][1] = body
             return FakeResponse(201, [{"id": 1}])
         if method == "POST":
             key_fields = ("source", "listing_id") if table == "listings" else ("idempotency_key",)
+            inserted = []
             for row in body:
-                self.tables[table][tuple(row[k] for k in key_fields)] = row
-            return FakeResponse(201, None)
-        if method == "GET":
-            return FakeResponse(200, [
-                {"idempotency_key": k[0], **v} for k, v in self.tables["notifications"].items()
-            ])
-        if method == "PATCH":
+                key = tuple(row[k] for k in key_fields)
+                if key in self.tables[table] and "ignore-duplicates" in prefer:
+                    continue
+                self.tables[table][key] = dict(row)
+                inserted.append(row)
+            return FakeResponse(201, inserted if "representation" in prefer else None)
+        if method == "PATCH" and table == "runs":
             self.tables["runs"][1].update(body)
             return FakeResponse(204, None)
+        rows = [r for r in self.tables[table].values() if self._matches(r, params)]
+        if method == "GET":
+            return FakeResponse(200, rows)
+        if method == "PATCH":
+            for r in rows:
+                r.update(body)
+            return FakeResponse(200, rows if "representation" in prefer else None)
         raise AssertionError(method)
+
+    @staticmethod
+    def _matches(row, params):
+        for col, cond in (params or {}).items():
+            if col == "select":
+                continue
+            assert cond.startswith("eq."), cond
+            if str(row.get(col)) != cond[3:]:
+                return False
+        return True
 
 
 class FakeResponse:
-    def __init__(self, status, payload):
+    def __init__(self, status, payload=None, content=b""):
         self.status_code = status
         self.ok = status < 400
         self._payload = payload
-        self.text = json.dumps(payload)
+        self.text = json.dumps(payload) if payload is not None else ""
+        self.content = content
 
     def json(self):
         return self._payload
+
+    def raise_for_status(self):
+        if not self.ok:
+            raise supabase_backup.requests.HTTPError(str(self.status_code))
+
+
+JPEG = b"\xff\xd8\xff\xe0fake-jpeg"
+
+
+class FakeTelegram:
+    def __init__(self):
+        self.calls = []  # (method, payload)
+        self.fail_methods = set()
+        self.images = {"https://img.example/1.jpg": JPEG}
+        self.pages = {}
+
+    def post(self, url, data=None, json=None, files=None, **_):
+        method = url.rsplit("/", 1)[1]
+        if method in self.fail_methods:
+            return FakeResponse(400, {"ok": False})
+        payload = dict(json or data or {})
+        if files:
+            payload["uploaded"] = files["photo"][1]
+        self.calls.append((method, payload))
+        return FakeResponse(200, {"ok": True})
+
+    def get(self, url, **_):
+        if url in self.images:
+            return FakeResponse(200, content=self.images[url])
+        if url in self.pages:
+            resp = FakeResponse(200)
+            resp.text = self.pages[url]
+            return resp
+        return FakeResponse(404)
 
 
 @pytest.fixture
@@ -123,84 +179,118 @@ def backend(monkeypatch):
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "service-key")
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "bot-token")
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "123")
-    monkeypatch.delenv("SUPABASE_NOTIFY_MODE", raising=False)
     fake = FakeSupabase()
-    sent = []
+    telegram = FakeTelegram()
     monkeypatch.setattr(supabase_backup.requests, "request", fake.handle)
-    monkeypatch.setattr(
-        supabase_backup.requests,
-        "post",
-        lambda url, data=None, **_: sent.append(json.loads(data)["text"]) or FakeResponse(200, {"ok": True}),
-    )
-    return fake, sent
+    monkeypatch.setattr(supabase_backup.requests, "post", telegram.post)
+    monkeypatch.setattr(supabase_backup.requests, "get", telegram.get)
+    return fake, telegram
 
 
-class TestBackup:
-    def test_skipped_without_config(self, monkeypatch):
+def run(listings, disable_notify=False):
+    return supabase_backup.run_supabase("vinted", listings, disable_notify)
+
+
+class TestNotify:
+    def test_error_without_config(self, monkeypatch):
         monkeypatch.delenv("SUPABASE_URL", raising=False)
-        result = supabase_backup.run_supabase_backup("vinted", [vinted_listing()], True, False)
-        assert result["enabled"] is False
+        result = run([vinted_listing()])
+        assert result["enabled"] is False and result["error"]
 
-    def test_mirrors_but_does_not_notify_when_convex_ok(self, backend):
-        fake, sent = backend
-        result = supabase_backup.run_supabase_backup("vinted", [vinted_listing()], True, False)
-        assert result["upserted"] == 1 and result["eligible"] == 1
-        assert sent == []
-        assert ("vinted_uk", "1") in fake.tables["listings"]
+    def test_sends_photo_alert_and_records_it(self, backend):
+        fake, telegram = backend
+        listings = [
+            vinted_listing("1", imageUrl="https://img.example/1.jpg"),
+            vinted_listing("2", minutes_old=120),
+        ]
+        result = run(listings)
+        assert result["notify"]["sent"] == 1 and result["notify"]["without_image"] == 0
+        [(method, payload)] = telegram.calls
+        assert method == "sendPhoto" and payload["uploaded"] == JPEG
+        assert "[HOT] Vinted UK" in payload["caption"]
+        assert "https://www.vinted.co.uk/items/1" in payload["caption"]
+        row = fake.tables["notifications"][("vinted_uk:1",)]
+        assert row["status"] == "sent" and row["sent_at"]
+        assert ("vinted_uk", "2") in fake.tables["listings"]
 
-    def test_falls_back_to_telegram_when_convex_fails(self, backend):
-        fake, sent = backend
-        listings = [vinted_listing("1"), vinted_listing("2", minutes_old=120)]
-        result = supabase_backup.run_supabase_backup("vinted", listings, False, False)
-        assert result["notify"]["sent"] == 1
-        assert len(sent) == 1 and "[HOT] Vinted UK" in sent[0]
-        assert fake.tables["notifications"][("vinted_uk:1",)]["status"] == "sent"
-        assert fake.tables["runs"][1]["fallback_notify"] is True
+    def test_never_alerts_same_listing_twice(self, backend):
+        _, telegram = backend
+        listing = vinted_listing("1", imageUrl="https://img.example/1.jpg")
+        run([listing])
+        result = run([listing])
+        assert result["notify"]["skipped"] == 1
+        assert len(telegram.calls) == 1
 
-    def test_fallback_does_not_resend(self, backend):
-        fake, sent = backend
-        fake.tables["notifications"][("vinted_uk:1",)] = {"status": "sent", "attempts": 1}
-        result = supabase_backup.run_supabase_backup("vinted", [vinted_listing("1")], False, False)
-        assert result["notify"]["skipped"] == 1 and sent == []
+    def test_claimed_but_unconfirmed_alert_is_not_resent(self, backend):
+        # A run killed after claiming leaves status 'sent' with no sent_at.
+        fake, telegram = backend
+        fake.tables["notifications"][("vinted_uk:1",)] = {
+            "idempotency_key": "vinted_uk:1", "status": "sent", "attempts": 1, "sent_at": None,
+        }
+        result = run([vinted_listing("1")])
+        assert result["notify"]["skipped"] == 1 and telegram.calls == []
+
+    def test_failed_alert_is_retried(self, backend):
+        fake, telegram = backend
+        fake.tables["notifications"][("vinted_uk:1",)] = {
+            "idempotency_key": "vinted_uk:1", "status": "failed", "attempts": 2,
+        }
+        result = run([vinted_listing("1", imageUrl="https://img.example/1.jpg")])
+        assert result["notify"]["sent"] == 1 and len(telegram.calls) == 1
+        assert fake.tables["notifications"][("vinted_uk:1",)]["attempts"] == 3
+
+    def test_send_failure_is_recorded_for_retry(self, backend):
+        fake, telegram = backend
+        telegram.fail_methods = {"sendPhoto", "sendMessage"}
+        result = run([vinted_listing("1", imageUrl="https://img.example/1.jpg")])
+        assert result["notify"]["failed"] == 1
+        assert fake.tables["notifications"][("vinted_uk:1",)]["status"] == "failed"
+
+    def test_missing_image_is_looked_up_on_listing_page(self, backend):
+        _, telegram = backend
+        telegram.pages["https://www.vinted.co.uk/items/1"] = (
+            '<meta property="og:image" content="https://img.example/1.jpg">'
+        )
+        run([vinted_listing("1")])
+        [(method, payload)] = telegram.calls
+        assert method == "sendPhoto" and payload["uploaded"] == JPEG
+
+    def test_webp_is_converted_to_jpeg(self, backend):
+        from io import BytesIO
+
+        from PIL import Image
+
+        _, telegram = backend
+        buf = BytesIO()
+        Image.new("RGB", (4, 4), "red").save(buf, format="WEBP")
+        telegram.images["https://img.example/1.webp"] = buf.getvalue()
+        run([vinted_listing("1", imageUrl="https://img.example/1.webp")])
+        [(method, payload)] = telegram.calls
+        assert method == "sendPhoto" and payload["uploaded"][:3] == b"\xff\xd8\xff"
+
+    def test_photo_by_url_when_download_fails(self, backend):
+        _, telegram = backend
+        run([vinted_listing("1", imageUrl="https://img.example/blocked.jpg")])
+        [(method, payload)] = telegram.calls
+        assert method == "sendPhoto" and payload["photo"] == "https://img.example/blocked.jpg"
+
+    def test_text_alert_when_no_image_exists(self, backend):
+        _, telegram = backend
+        result = run([vinted_listing("1")])
+        assert result["notify"]["without_image"] == 1
+        [(method, payload)] = telegram.calls
+        assert method == "sendMessage" and "no image available" in payload["text"]
 
     def test_disable_notify_respected(self, backend):
-        _, sent = backend
-        result = supabase_backup.run_supabase_backup("vinted", [vinted_listing()], False, True)
-        assert result["notify"] == {"disabled": True} and sent == []
+        _, telegram = backend
+        result = run([vinted_listing()], disable_notify=True)
+        assert result["notify"] == {"disabled": True} and telegram.calls == []
 
 
 class TestFinish:
-    def test_ok_when_convex_ok(self):
-        assert run_cycle.finish(None, {"enabled": False}) == 0
+    def test_ok_without_error(self):
+        assert run_cycle.finish({"enabled": True}) == 0
 
-    def test_ok_when_supabase_covers_convex_failure(self):
-        assert run_cycle.finish("boom", {"enabled": True}) == 0
-
-    def test_fails_when_both_fail(self):
+    def test_raises_on_supabase_error(self):
         with pytest.raises(RuntimeError):
-            run_cycle.finish("boom", {"enabled": True, "error": "also boom"})
-        with pytest.raises(RuntimeError):
-            run_cycle.finish("boom", {"enabled": False, "reason": "not set"})
-
-
-class TestPrimaryMode:
-    def test_always_mode_sends_even_when_convex_ok(self, backend, monkeypatch):
-        monkeypatch.setenv("SUPABASE_NOTIFY_MODE", "always")
-        _, sent = backend
-        result = supabase_backup.run_supabase_backup("vinted", [vinted_listing()], True, False)
-        assert result["notify"]["sent"] == 1 and len(sent) == 1
-
-    def test_convex_notify_skipped_when_supabase_primary(self, monkeypatch):
-        monkeypatch.setenv("SUPABASE_URL", "https://example.supabase.co")
-        monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "k")
-        monkeypatch.setenv("SUPABASE_NOTIFY_MODE", "always")
-        calls = []
-        monkeypatch.setattr(run_cycle, "post_json", lambda url, *_: calls.append(url) or {"inserted": 1})
-        _, notify = run_cycle.run_convex("https://x.convex.site", "s", [vinted_listing()], False)
-        assert notify["disabled"] is True
-        assert calls == ["https://x.convex.site/ingest/listings"]
-
-    def test_finish_in_always_mode(self):
-        assert run_cycle.finish("convex down", {"enabled": True, "notify_mode": "always"}) == 0
-        with pytest.raises(RuntimeError):
-            run_cycle.finish(None, {"enabled": True, "notify_mode": "always", "error": "boom"})
+            run_cycle.finish({"enabled": True, "error": "boom"})

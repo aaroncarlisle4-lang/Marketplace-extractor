@@ -139,3 +139,13 @@ def test_run_resolves_ages_and_stops_at_stale(monkeypatch):
     assert item_pages == ["https://www.vinted.co.uk/items/300-x", "https://www.vinted.co.uk/items/200-x"]
     assert scraper.stats["stopped_reason"] == "reached_stale_items"
     assert not any("page=3" in url for url in driver.visited)
+
+
+def test_photo_url_handles_photo_shapes():
+    from vinted_scraper import _photo_url
+
+    assert _photo_url({"url": "https://a/1.jpg"}) == "https://a/1.jpg"
+    assert _photo_url({"fullSizeUrl": "https://a/2.jpg"}) == "https://a/2.jpg"
+    assert _photo_url({"thumbnails": [{"url": "https://a/s.jpg"}, {"url": "https://a/l.jpg"}]}) == "https://a/l.jpg"
+    assert _photo_url("https://a/3.jpg") == "https://a/3.jpg"
+    assert _photo_url({}) is None and _photo_url(None) is None

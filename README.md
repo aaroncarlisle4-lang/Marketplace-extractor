@@ -2,8 +2,11 @@
 
 Patagonia screener + notifier for Vinted UK using:
 - Python Selenium worker for scraping
-- Convex for ingestion, screening, dedupe, and state
-- Telegram for notifications
+- Supabase for storage, screening, dedupe, and scheduling (pg_cron)
+- Telegram for notifications (each alert is a photo of the listing with the details and link as caption)
+
+Convex is retired: its crons are removed and its Telegram/GitHub tokens unset,
+so it can no longer send alerts. The `convex/` folder is kept for reference only.
 
 Also includes a Facebook Marketplace pipeline for:
 - `captain's chair`
@@ -23,7 +26,7 @@ Also includes a Facebook Marketplace pipeline for:
   - `HOT` < 10 min
   - `NEW` < 60 min
   - `RECENT` < 24h
-- Sends deduplicated Telegram alerts.
+- Sends deduplicated Telegram alerts. Each listing is claimed in Supabase's `notifications` table before it is sent, so it is alerted at most once.
 
 ## Project layout
 - `workers/vinted_scraper.py`: Selenium scraper implementation
