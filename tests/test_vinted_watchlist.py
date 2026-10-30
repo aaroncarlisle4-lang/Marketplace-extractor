@@ -88,3 +88,21 @@ class PersistenceTests(unittest.TestCase):
                     self.assertEqual(scrape.call_args.kwargs['query'], 'Nike shoes')
                     self.assertEqual(scrape.call_args.kwargs['max_price_gbp'], 36)
                     self.assertFalse(scrape.call_args.kwargs['strict_target_only'])
+
+    def test_menu_is_processed_between_searches_without_changing_current_cycle(self):
+        from unittest.mock import patch
+        import run_cycle
+        state = {'items': [{'query': 'patagonia r1', 'max_price_minor': 5000}, {'query': 'patagonia r2', 'max_price_minor': 5000}]}
+        responses = []
+        def poll(client, current):
+            if len(responses) == 1:
+                responses.append(handle_message(current, 'Watch list'))
+                current['items'].clear()
+            else:
+                responses.append('polled')
+        with patch.dict('os.environ', {'SUPABASE_URL': 'fake', 'SUPABASE_SERVICE_ROLE_KEY': 'fake', 'VINTED_POLL_TELEGRAM': '1'}), patch('vinted_watchlist.configured_state', return_value=(None, state)), patch('vinted_watchlist.poll_updates', side_effect=poll), patch.object(run_cycle, 'scrape_vinted_listings_with_stats', return_value={'listings': [], 'stats': {}}) as scrape, patch('builtins.print'):
+            run_cycle.main()
+        self.assertEqual(len(responses), 3)
+        self.assertIn('patagonia r1', responses[1])
+        self.assertIn('patagonia r2', responses[1])
+        self.assertEqual(scrape.call_count, 2)
