@@ -615,7 +615,16 @@ def run_supabase(
         for raw in raw_listings:
             listing = normalize_listing(raw)
             if listing is not None:
-                screened.append((listing, screen_listing(listing, now_ms)))
+                watches = raw.get("_watches")
+                if watches and listing["source"] == "vinted_uk":
+                    from vinted_watchlist import screen_watch
+                    matches = [screen_listing(listing, now_ms) if w.get("legacy")
+                               else screen_watch(listing, w, now_ms) for w in watches]
+                    match = next((m for m in matches if m["eligibleForNotify"]),
+                                 next((m for m in matches if m["isMatch"]), matches[0]))
+                else:
+                    match = screen_listing(listing, now_ms)
+                screened.append((listing, match))
 
         client.upsert(
             "listings",

@@ -39,7 +39,7 @@ def run_vinted_cycle():
             [sys.executable, "/app/run_cycle.py"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            env=os.environ.copy(),
+            env={**os.environ, "VINTED_POLL_TELEGRAM": "0"},
         )
         stdout, stderr = proc.communicate(timeout=_SUBPROCESS_TIMEOUT)
         if proc.returncode == 0:
@@ -76,6 +76,8 @@ async def lifespan(app: FastAPI):
         id="vinted",
         next_run_time=datetime.now(timezone.utc) + timedelta(seconds=30),
     )
+    from vinted_watchlist import poll_configured
+    scheduler.add_job(poll_configured, "interval", seconds=5, id="vinted-menu", max_instances=1)
     scheduler.start()
     logger.info("Scheduler started: Vinted every %d minutes", interval)
     yield
