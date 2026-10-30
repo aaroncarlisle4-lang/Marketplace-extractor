@@ -1,0 +1,48 @@
+name: Show Vinted Telegram Menu
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  show-menu:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests==2.32.3
+      - name: Show menu in configured chat
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN || vars.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID || vars.TELEGRAM_CHAT_ID }}
+        run: |
+          python - <<'PY'
+          import os
+          import sys
+          import requests
+          sys.path.insert(0, 'workers')
+          from vinted_watchlist import MENU
+          token = os.environ['TELEGRAM_BOT_TOKEN'].strip()
+          chat = os.environ['TELEGRAM_CHAT_ID'].strip()
+          def call(method, payload):
+              try:
+                  result = requests.post(f'https://api.telegram.org/bot{token}/{method}', json=payload, timeout=20).json()
+              except (requests.RequestException, ValueError):
+                  raise SystemExit('Telegram request failed') from None
+              if not result.get('ok'):
+                  raise SystemExit(f'Telegram {method} failed (code {result.get("error_code")})')
+              return result['result']
+          bot = call('getMe', {})
+          print('Configured bot: @' + bot['username'])
+          call('sendMessage', {
+              'chat_id': chat,
+              'text': 'Vinted watch list is ready. Use Add item to save a search and price limit, Watch list to review searches, or Remove item to delete one. Replies arrive when the next scraper cycle starts.',
+              'reply_markup': MENU,
+          })
+          print('Telegram accepted the watch-list menu message.')
+          PY
