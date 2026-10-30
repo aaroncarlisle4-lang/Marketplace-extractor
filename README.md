@@ -124,3 +124,41 @@ With `DISABLE_NOTIFY=1`, it keeps ingesting and screening in Convex without Tele
 3. If repeated Telegram failures occur:
 - Check `queries:getNotificationFailureSummary` for the top error strings.
 - Fix credentials and rerun one manual cycle.
+
+## Vinted Telegram watch list
+
+Apply `supabase/migrations/20261030120000_vinted_watchlist.sql` to the existing
+Supabase project **before deploying these workers**. Set `SUPABASE_URL`,
+`SUPABASE_SERVICE_ROLE_KEY`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID` on the
+worker host. The new table has RLS enabled and is accessible only to the service
+role. No new Python dependency is needed.
+
+Send `/start` to the Vinted bot to show its keyboard:
+
+- **Add item** asks for search terms, then a maximum price in GBP.
+- **Watch list** shows all saved searches and their price limits.
+- **Remove item** asks for the displayed search number to delete.
+- **Cancel** exits the current operation.
+
+Only messages in `TELEGRAM_CHAT_ID` can change the list. Use a private chat for
+single-user control. Searches and pending conversations survive restarts.
+The first run seeds the existing environment/default searches with their current
+filters. Once initialized, Supabase is authoritative: removing every search
+pauses scraping, and environment changes do not recreate deleted searches.
+New searches match all search words in the listing title, brand or description,
+with the saved GBP price cap and the existing freshness/notification windows.
+Existing seeded searches retain the Patagonia screening rules. Listing alerts
+continue using the existing deduplication records.
+
+The server polls menu messages every five seconds; the GitHub Actions worker
+processes messages at the beginning of each cycle. Run **one polling host per
+bot token**, with no Telegram webhook configured. When using the server, disable
+any separate scheduled Actions worker for this bot. Scraper subprocesses launched
+by the server set `VINTED_POLL_TELEGRAM=0` to avoid competing with its menu poller.
+Actions-only users may need to wait until the next scheduled cycle for each reply.
+Send `/start` after deployment to reveal the menu; deployment sends no unsolicited
+messages.
+
+Validation: `python -m pytest -q` (install `pytest` plus
+`workers/requirements.txt`). Tests use fake Telegram/Supabase services and do
+not send real messages.

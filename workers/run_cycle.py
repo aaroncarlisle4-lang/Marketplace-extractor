@@ -89,13 +89,12 @@ def main() -> int:
     require_env("SUPABASE_URL")
     require_env("SUPABASE_SERVICE_ROLE_KEY")
 
-    queries = parse_list_env(os.getenv("VINTED_QUERIES"))
-    if not queries:
-        single_query = os.getenv("VINTED_QUERY")
-        queries = [single_query] if single_query else DEFAULT_VINTED_QUERIES
-    queries = [q.strip() for q in queries if q.strip()]
-    if not queries:
-        raise RuntimeError("No Vinted queries configured")
+    from vinted_watchlist import configured_state, poll_updates
+    client, state = configured_state()
+    if os.getenv("VINTED_POLL_TELEGRAM", "1") == "1":
+        poll_updates(client, state)
+    watches = state["items"]
+    queries = [watch["query"] for watch in watches]
 
     target_terms = parse_list_env(os.getenv("VINTED_TARGET_TERMS"))
     if not target_terms:
@@ -118,10 +117,9 @@ def main() -> int:
     deduped_listings: Dict[str, Dict[str, Any]] = {}
     scrape_results_by_query: List[Dict[str, Any]] = []
 
-    for query in queries:
-        q_lower = query.lower()
-        # Use 50 for Patagonia, otherwise use the configured MAX_PRICE_GBP (default 20)
-        current_max_price = VINTED_MAX_PRICE_MINOR // 100 if "patagonia" in q_lower else MAX_PRICE_GBP
+    for watch in watches:
+        query = watch["query"]
+        current_max_price = (watch["max_price_minor"] + 99) // 100
 
         scrape_result = scrape_vinted_listings_with_stats(
             query=query,
@@ -129,7 +127,7 @@ def main() -> int:
             page_load_timeout_seconds=page_load_timeout_seconds,
             max_runtime_seconds=per_query_runtime_seconds,
             max_item_age_hours=max_item_age_hours,
-            strict_target_only=strict_target_only,
+            strict_target_only=strict_target_only if watch.get("legacy") else False,
             target_terms=target_terms,
             max_price_gbp=current_max_price,
         )
@@ -143,6 +141,8 @@ def main() -> int:
         )
         for listing in listings_for_query:
             key = f"{listing.get('source', 'unknown')}:{listing.get('listingId', '')}"
+            previous = deduped_listings.get(key, {})
+            listing["_watches"] = previous.get("_watches", []) + [watch]
             deduped_listings[key] = listing
 
     listings = list(deduped_listings.values())
