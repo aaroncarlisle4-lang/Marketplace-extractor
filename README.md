@@ -151,11 +151,11 @@ Existing seeded searches retain the Patagonia screening rules. Listing alerts
 continue using the existing deduplication records.
 
 The server polls menu messages every five seconds; the GitHub Actions worker
-processes messages at the beginning of each cycle. Run **one polling host per
+processes messages at the beginning of each cycle and between search queries. Run **one polling host per
 bot token**, with no Telegram webhook configured. When using the server, disable
 any separate scheduled Actions worker for this bot. Scraper subprocesses launched
 by the server set `VINTED_POLL_TELEGRAM=0` to avoid competing with its menu poller.
-Actions-only users may need to wait until the next scheduled cycle for each reply.
+Actions-only users may need to wait for the current search query or the next scheduled cycle for each reply. Changes made during a scrape apply to the next cycle.
 Send `/start` after deployment to reveal the menu; deployment sends no unsolicited
 messages.
 

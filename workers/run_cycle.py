@@ -93,7 +93,7 @@ def main() -> int:
     client, state = configured_state()
     if os.getenv("VINTED_POLL_TELEGRAM", "1") == "1":
         poll_updates(client, state)
-    watches = state["items"]
+    watches = [dict(watch) for watch in state["items"]]
     queries = [watch["query"] for watch in watches]
 
     target_terms = parse_list_env(os.getenv("VINTED_TARGET_TERMS"))
@@ -144,6 +144,9 @@ def main() -> int:
             previous = deduped_listings.get(key, {})
             listing["_watches"] = previous.get("_watches", []) + [watch]
             deduped_listings[key] = listing
+
+        if os.getenv("VINTED_POLL_TELEGRAM", "1") == "1":
+            poll_updates(client, state)
 
     listings = list(deduped_listings.values())
     if not listings:
